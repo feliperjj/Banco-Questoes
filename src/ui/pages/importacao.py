@@ -3,7 +3,7 @@ import os
 import re
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
-from PySide6.QtWidgets import QFileDialog, QFormLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QComboBox, QHeaderView, QLineEdit, QMessageBox, QProgressDialog, QScrollArea, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QComboBox, QHeaderView, QLineEdit, QMessageBox, QProgressDialog, QScrollArea, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget
 
 import src.models.questoes_repo as repo
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
@@ -37,6 +37,14 @@ class ImportacaoPage(QWidget):
         btn_gabarito = QPushButton("Selecionar Gabarito (PDF)"); btn_gabarito.clicked.connect(self.selecionar_gabarito)
         top.addWidget(btn); top.addWidget(btn_gabarito); top.addWidget(self.lbl_arquivo); top.addStretch(); layout.addLayout(top)
         gabarito_lote = QHBoxLayout(); self.gabarito_lote_input = QLineEdit(); self.gabarito_lote_input.setPlaceholderText("Cole o gabarito inteiro: A D B C ..."); aplicar_gabarito = QPushButton("Aplicar Gabarito em Lote"); aplicar_gabarito.clicked.connect(self.aplicar_gabarito_lote); gabarito_lote.addWidget(self.gabarito_lote_input); gabarito_lote.addWidget(aplicar_gabarito); layout.addLayout(gabarito_lote)
+        classificacao = QGroupBox("Classificar questões em lote")
+        classificacao_layout = QHBoxLayout(classificacao)
+        self.classificacao_inicio = QSpinBox(); self.classificacao_inicio.setMinimum(1); self.classificacao_inicio.setPrefix("Da questão ")
+        self.classificacao_fim = QSpinBox(); self.classificacao_fim.setMinimum(1); self.classificacao_fim.setPrefix("até ")
+        self.disciplina_lote_input = QComboBox(); self.disciplina_lote_input.setEditable(True); self.disciplina_lote_input.addItems(["Língua Portuguesa", "Matemática", "Raciocínio Lógico", "Informática", "Conhecimentos Específicos"])
+        self.categoria_lote_input = QLineEdit(); self.categoria_lote_input.setPlaceholderText("Categoria / assunto")
+        aplicar_classificacao = QPushButton("Aplicar ao bloco"); aplicar_classificacao.clicked.connect(self.aplicar_classificacao_lote)
+        classificacao_layout.addWidget(self.classificacao_inicio); classificacao_layout.addWidget(self.classificacao_fim); classificacao_layout.addWidget(self.disciplina_lote_input); classificacao_layout.addWidget(self.categoria_lote_input); classificacao_layout.addWidget(aplicar_classificacao); layout.addWidget(classificacao)
         main = QHBoxLayout(); self.lista_questoes = QListWidget(); self.lista_questoes.setObjectName("import-list"); self.lista_questoes.setFixedWidth(300); self.lista_questoes.itemClicked.connect(self.carregar_edicao); main.addWidget(self.lista_questoes)
         self.painel_edicao = QWidget(); self.painel_edicao.setDisabled(True); form = QFormLayout(self.painel_edicao)
         self.lbl_confianca = QLabel(); form.addRow("Confiança da Extração:", self.lbl_confianca)
@@ -66,6 +74,9 @@ class ImportacaoPage(QWidget):
         self.lbl_arquivo.setText(os.path.basename(caminho)); self.lista_questoes.clear(); self.painel_edicao.setDisabled(True); self.caminho_questoes = caminho
         try:
             self.questoes_extraidas = parsear_questoes(extrair_texto(caminho))
+            self.classificacao_inicio.setMaximum(max(1, len(self.questoes_extraidas)))
+            self.classificacao_fim.setMaximum(max(1, len(self.questoes_extraidas)))
+            self.classificacao_fim.setValue(max(1, len(self.questoes_extraidas)))
             if self.questoes_extraidas:
                 primeira = self.questoes_extraidas[0]
                 self.disciplina_input.setCurrentText(primeira.get("disciplina", ""))
@@ -165,6 +176,34 @@ class ImportacaoPage(QWidget):
         if self.item_atual:
             self.carregar_edicao(self.item_atual)
         QMessageBox.information(self, "Sucesso", f"{len(tokens)} gabaritos aplicados em lote.")
+
+    def aplicar_classificacao_lote(self):
+        if not self.questoes_extraidas:
+            QMessageBox.warning(self, "Aviso", "Selecione primeiro o PDF das questões.")
+            return
+        inicio = self.classificacao_inicio.value()
+        fim = self.classificacao_fim.value()
+        disciplina = self.disciplina_lote_input.currentText().strip()
+        categoria = self.categoria_lote_input.text().strip()
+        if inicio > fim:
+            QMessageBox.warning(self, "Faixa inválida", "A questão inicial não pode ser maior que a final.")
+            return
+        if not disciplina:
+            QMessageBox.warning(self, "Disciplina obrigatória", "Informe a disciplina do bloco.")
+            return
+        for numero in range(inicio, min(fim, len(self.questoes_extraidas)) + 1):
+            questao = self.questoes_extraidas[numero - 1]
+            questao["disciplina"] = disciplina
+            questao["topico"] = categoria
+            item = self.lista_questoes.item(numero - 1)
+            if item:
+                resumo = " ".join(questao["enunciado"].split()[:5])
+                item.setText(f"Q{numero} [{questao['confianca'].upper()}] - {disciplina} - {resumo}...")
+        self.disciplina_input.setCurrentText(disciplina)
+        self.topico_input.setText(categoria)
+        if self.item_atual:
+            self.carregar_edicao(self.item_atual)
+        QMessageBox.information(self, "Classificação aplicada", f"{fim - inicio + 1} questão(ões) classificadas em lote.")
 
     def carregar_edicao(self, item):
         self.item_atual = item; q = self.questoes_extraidas[item.data(Qt.UserRole)]; self.painel_edicao.setDisabled(False); self.lbl_confianca.setText(f"<b>{q['confianca'].upper()}</b>")
