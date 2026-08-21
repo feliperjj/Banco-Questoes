@@ -194,6 +194,7 @@ QTableWidget {
 }
 
 QTableWidget::item { padding: 8px; border-bottom: 1px solid #f0f3f8; }
+QTableWidget::item { padding: 10px 12px; }
 QTableWidget::item:selected { border-left: 3px solid #4f7cff; }
 QHeaderView::section {
     background: #eef2f8;
