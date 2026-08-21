@@ -160,7 +160,9 @@ QPushButton#secondary-button { background: #ffffff; color: #405170; border-color
 QPushButton#secondary-button:hover { background: #edf2fb; border-color: #aabbdc; }
 QPushButton#danger-button { background: #d95362; border-color: #d95362; }
 QPushButton#danger-button:hover { background: #bd3f4e; border-color: #bd3f4e; }
-QPushButton#table-action-button { padding: 5px 12px; min-height: 0px; border-radius: 7px; font-weight: 600; }
+QPushButton#table-action-button { background: #eef3ff; color: #315dcc; border: 1px solid #cbd8ff; padding: 5px 10px; min-height: 0px; border-radius: 7px; font-size: 9pt; font-weight: 700; }
+QPushButton#table-action-button:hover { background: #dfe8ff; border-color: #9fb5ee; }
+QPushButton#table-action-button:pressed { background: #cbd8ff; }
 
 QLineEdit, QTextEdit, QComboBox, QSpinBox {
     background: #ffffff;
