@@ -73,6 +73,9 @@ QLabel#dashboard-subtitle, QLabel#dashboard-details, QLabel#dashboard-status {
 }
 
 QLabel#dashboard-status { font-size: 9pt; }
+QLabel#dashboard-section-title { color: #24324a; font-size: 12px; font-weight: 700; }
+QLabel#dashboard-hero-title { color: #ffffff; font-size: 16px; font-weight: 750; }
+QLabel#dashboard-hero-text { color: #d9e4ff; font-size: 10pt; }
 QLabel#exam-info { color: #34435f; font-size: 13px; font-weight: 650; }
 QLabel#page-subtitle { color: #71809a; font-size: 10pt; }
 QLabel#section-title { color: #24324a; font-size: 13px; font-weight: 700; padding-top: 4px; }
@@ -132,6 +135,18 @@ QLabel#stat-card-value { color: #17233c; font-size: 22px; font-weight: 750; padd
 QWidget#chart-card { background: #ffffff; border: 1px solid #e1e7f1; border-radius: 12px; }
 
 /* Dashboard ------------------------------------------------------------- */
+QFrame#dashboard-hero {
+    background: #315dcc;
+    border: 1px solid #315dcc;
+    border-radius: 14px;
+}
+
+QFrame#dashboard-summary-card {
+    background: #ffffff;
+    border: 1px solid #e1e7f1;
+    border-radius: 13px;
+}
+
 QFrame#dashboard-card {
     background: #ffffff;
     border: 1px solid #e1e7f1;
@@ -141,6 +156,21 @@ QFrame#dashboard-card {
 QFrame#dashboard-card:hover { border: 1px solid #b9c9ef; }
 QLabel#dashboard-card-title { color: #71809a; font-size: 9pt; }
 QLabel#dashboard-card-value { color: #17233c; font-size: 25px; font-weight: 750; }
+QLabel#dashboard-card-caption { color: #8b98ad; font-size: 8pt; }
+QPushButton#dashboard-primary-action {
+    background: #ffffff;
+    color: #315dcc;
+    border-color: #ffffff;
+    padding: 8px 13px;
+}
+QPushButton#dashboard-primary-action:hover { background: #edf2ff; border-color: #edf2ff; }
+QPushButton#dashboard-secondary-action {
+    background: transparent;
+    color: #ffffff;
+    border-color: #9db7ff;
+    padding: 8px 13px;
+}
+QPushButton#dashboard-secondary-action:hover { background: #4873df; border-color: #ffffff; }
 
 /* Controls -------------------------------------------------------------- */
 QPushButton {
