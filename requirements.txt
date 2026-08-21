@@ -1,0 +1,6 @@
+PySide6
+pytest
+pdfplumber
+python-docx
+peewee
+rapidocr_onnxruntime

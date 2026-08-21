@@ -1,0 +1,38 @@
+# Ambiente Python
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Banco local, logs e arquivos gerados pela aplicação
+data/
+
+# OCR/modelos e instaladores locais
+tools/
+
+# Configuração local e segredos
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE e sistema operacional
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# Builds e cobertura
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
