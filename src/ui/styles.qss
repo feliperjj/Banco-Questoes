@@ -74,6 +74,8 @@ QLabel#dashboard-subtitle, QLabel#dashboard-details, QLabel#dashboard-status {
 
 QLabel#dashboard-status { font-size: 9pt; }
 QLabel#exam-info { color: #34435f; font-size: 13px; font-weight: 650; }
+QLabel#page-subtitle { color: #71809a; font-size: 10pt; }
+QLabel#section-title { color: #24324a; font-size: 13px; font-weight: 700; padding-top: 4px; }
 QLabel#timer-label {
     color: #315dcc;
     background: #eaf0ff;
@@ -83,6 +85,51 @@ QLabel#timer-label {
     font-size: 15px;
     font-weight: 700;
 }
+QLabel#exam-progress-label, QLabel#review-progress-label { color: #71809a; font-size: 9pt; font-weight: 650; }
+QLabel#exam-question-kicker, QLabel#review-kicker { color: #4f7cff; font-size: 9pt; font-weight: 800; letter-spacing: 1px; }
+QFrame#exam-question-card, QFrame#review-card {
+    background: #ffffff;
+    border: 1px solid #e1e7f1;
+    border-radius: 14px;
+}
+QFrame#exam-options-card, QFrame#review-options-card {
+    background: #f8faff;
+    border: 1px solid #e4eaf5;
+    border-radius: 10px;
+}
+QTextEdit#exam-statement, QTextEdit#review-statement {
+    background: #ffffff;
+    border: none;
+    color: #24324a;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 4px;
+}
+QRadioButton#exam-option, QRadioButton#review-option {
+    background: #ffffff;
+    border: 1px solid #e0e7f2;
+    border-radius: 8px;
+    padding: 11px 12px;
+    color: #34435f;
+}
+QRadioButton#exam-option:hover, QRadioButton#review-option:hover { border-color: #9fb5ee; background: #f4f7ff; }
+QRadioButton#exam-option:checked, QRadioButton#review-option:checked { border: 2px solid #4f7cff; background: #edf2ff; color: #244fae; }
+QProgressBar#exam-progress, QProgressBar#review-progress {
+    background: #e7edf7;
+    border: none;
+    border-radius: 4px;
+    height: 7px;
+}
+QProgressBar#exam-progress::chunk, QProgressBar#review-progress::chunk { background: #4f7cff; border-radius: 4px; }
+QLabel#empty-state { color: #71809a; font-size: 12px; padding: 40px; }
+QFrame#stat-card {
+    background: #ffffff;
+    border: 1px solid #e1e7f1;
+    border-radius: 12px;
+}
+QLabel#stat-card-title { color: #71809a; font-size: 9pt; }
+QLabel#stat-card-value { color: #17233c; font-size: 22px; font-weight: 750; padding-top: 4px; }
+QWidget#chart-card { background: #ffffff; border: 1px solid #e1e7f1; border-radius: 12px; }
 
 /* Dashboard ------------------------------------------------------------- */
 QFrame#dashboard-card {
