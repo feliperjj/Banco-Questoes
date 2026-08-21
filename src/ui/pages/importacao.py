@@ -86,14 +86,30 @@ class ImportacaoPage(QWidget):
         if not self.questoes_extraidas:
             QMessageBox.warning(self, "Aviso", "Selecione primeiro o PDF das questões.")
             return
-        codigo = re.search(r"(dpf\d+[_-]\d+)", os.path.basename(self.caminho_questoes), re.IGNORECASE)
+        nome_questoes = os.path.basename(self.caminho_questoes).lower()
+        codigo = re.search(r"(dpf\d+[_-]\d+)", nome_questoes, re.IGNORECASE)
+        if not codigo:
+            # Alguns editais usam o nome do cargo no arquivo, enquanto o
+            # gabarito reúne vários cargos. Use o código do cargo conhecido.
+            codigos_por_nome = {
+                "analista_de_informatica": "401",
+                "analista": "401",
+                "tecnico_de_informatica": "203",
+                "auxiliar_administrativo": "200",
+                "contador": "402",
+                "advogado": "400",
+            }
+            codigo_cargo = next((valor for chave, valor in codigos_por_nome.items() if chave in nome_questoes), None)
+        else:
+            codigo_cargo = codigo.group(1)
         self.gabarito_progresso = QProgressDialog("Lendo o gabarito...", None, 0, 0, self)
         self.gabarito_progresso.setWindowTitle("Importação do gabarito")
         self.gabarito_progresso.setWindowModality(Qt.WindowModal)
         self.gabarito_progresso.setMinimumDuration(0)
         self.gabarito_progresso.show()
         self.gabarito_thread = QThread(self)
-        self.gabarito_worker = GabaritoWorker(caminho, codigo.group(1) if codigo else None)
+        self.caminho_gabarito = caminho
+        self.gabarito_worker = GabaritoWorker(caminho, codigo_cargo)
         self.gabarito_worker.moveToThread(self.gabarito_thread)
         self.gabarito_thread.started.connect(self.gabarito_worker.executar)
         self.gabarito_worker.concluido.connect(self._finalizar_importacao_gabarito)
@@ -116,7 +132,7 @@ class ImportacaoPage(QWidget):
                 q["gabarito"] = gabaritos[numero]
                 item = self.lista_questoes.item(numero - 1)
                 item.setText(f"Q{numero} [{q['confianca'].upper()}] - {q['gabarito']} - {' '.join(q['enunciado'].split()[:6])}...")
-        self.lbl_arquivo.setText(f"{self.lbl_arquivo.text()} | gabarito: {os.path.basename(caminho)}")
+        self.lbl_arquivo.setText(f"{self.lbl_arquivo.text()} | gabarito: {os.path.basename(self.caminho_gabarito)}")
         if self.item_atual:
             self.carregar_edicao(self.item_atual)
         mensagem = f"{len(gabaritos)} gabaritos reconhecidos e vinculados."

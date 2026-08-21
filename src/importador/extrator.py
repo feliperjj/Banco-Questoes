@@ -81,7 +81,7 @@ def extrair_texto_docx(caminho: str) -> str:
 
 
 def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict[int, str]:
-    """Extrai o mapa item -> C/E de um PDF de gabarito preliminar."""
+    """Extrai o mapa questão -> alternativa de tabelas de gabarito."""
     gabaritos = {}
     codigo_prova = (codigo_prova or "").lower().replace("-", "_")
     with pdfplumber.open(caminho) as pdf:
@@ -103,6 +103,23 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
                 for item, resposta in zip(itens, respostas):
                     if item:
                         gabaritos[item] = "Certo" if resposta == "C" else "Errado"
+            # Gabaritos de múltipla escolha normalmente vêm em duas linhas:
+            # "1 2 3 ..." e, logo abaixo, "A C B ...". O cabeçalho do cargo
+            # permite ignorar os demais gabaritos existentes no mesmo PDF.
+            cargo_selecionado = not codigo_prova
+            for indice, linha in enumerate(linhas):
+                if re.search(r"c[oó]digo\s*\d{3}", linha, re.IGNORECASE):
+                    codigo = re.search(r"c[oó]digo\s*(\d{3})", linha, re.IGNORECASE).group(1)
+                    cargo_selecionado = not codigo_prova or codigo in codigo_prova
+                    continue
+                numeros = re.findall(r"\d{1,3}", linha) if cargo_selecionado else []
+                if not numeros or indice + 1 >= len(linhas):
+                    continue
+                respostas_linha = re.findall(r"\b[A-E]\b", linhas[indice + 1].upper())
+                if len(respostas_linha) != len(numeros):
+                    continue
+                for numero, resposta in zip(numeros, respostas_linha):
+                    gabaritos[int(numero)] = resposta
             if len(gabaritos) >= 120 and codigo_prova:
                 break
     logger.info("Gabarito extraído: %s itens de %s", len(gabaritos), caminho)
