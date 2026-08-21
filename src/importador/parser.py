@@ -44,6 +44,7 @@ def extrair_metadados_prova(texto: str) -> dict:
         ("VUNESP", ("VUNESP",)),
         ("IBFC", ("IBFC",)),
         ("CONSULPLAN", ("CONSULPLAN",)),
+        ("QUADRIX", ("QUADRIX",)),
     )
     banca = next((nome for nome, marcas in bancas if any(marca in upper for marca in marcas)), "")
     linhas_contexto = [linha for linha in texto.splitlines() if re.search(r"(?i)aplica|edital|concurso|publica|realiza|prova de", linha)]
@@ -66,6 +67,17 @@ def extrair_metadados_prova(texto: str) -> dict:
         if numero_pendente is not None and disciplina_atual:
             disciplinas[numero_pendente] = disciplina_atual
             numero_pendente = None
+
+    # Alguns cadernos não repetem o nome da disciplina antes de cada bloco;
+    # deixam apenas "Conhecimentos Básicos" e a indicação "questões de 1 a
+    # 15". Nesse padrão de prova superior, a divisão oficial é fixa.
+    if re.search(r"texto\s+para\s+as\s+quest.*?1\s+a\s+15", texto, re.IGNORECASE):
+        for numero in range(1, 16):
+            disciplinas.setdefault(numero, "Língua Portuguesa")
+        for numero in range(16, 26):
+            disciplinas.setdefault(numero, "Raciocínio Lógico e Matemática")
+        for numero in range(26, 51):
+            disciplinas.setdefault(numero, "Conhecimentos Específicos")
     return {"banca": banca, "ano": ano, "disciplinas": disciplinas}
 
 
