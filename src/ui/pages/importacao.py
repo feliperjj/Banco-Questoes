@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class GabaritoWorker(QObject):
-    concluido = Signal(dict)
+    # O resultado é um dicionário Python. object evita que o Shiboken tente
+    # convertê-lo para um tipo C++ ao atravessar a thread.
+    concluido = Signal(object)
     falhou = Signal(str)
 
     def __init__(self, caminho, codigo):
@@ -120,7 +122,7 @@ class ImportacaoPage(QWidget):
         self.gabarito_thread.finished.connect(self.gabarito_thread.deleteLater)
         self.gabarito_thread.start()
 
-    @Slot(dict)
+    @Slot(object)
     def _finalizar_importacao_gabarito(self, gabaritos):
         if self.gabarito_progresso:
             self.gabarito_progresso.close(); self.gabarito_progresso.deleteLater(); self.gabarito_progresso = None
