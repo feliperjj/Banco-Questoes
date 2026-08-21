@@ -76,6 +76,8 @@ Se o PDF do gabarito não puder ser interpretado, cole a sequência de respostas
 A D B C E A B D C E ...
 ```
 
+> **Atenção:** PDFs de bancas diferentes podem usar estruturas, cabeçalhos, colunas e tabelas distintas. Por isso, algumas informações — como disciplina, categoria, alternativas ou gabarito — podem precisar de ajustes dependendo do arquivo. Sempre confira a prévia e valide as questões antes de salvá-las no banco.
+
 ## Instalação
 
 Requisito: Python 3.12 ou superior.
