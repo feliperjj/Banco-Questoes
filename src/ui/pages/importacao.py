@@ -51,6 +51,7 @@ class ImportacaoPage(QWidget):
             self.alternativas_tabela.setItem(linha, 0, QTableWidgetItem(letra))
         form.addRow("Opções (se houver):", self.alternativas_tabela)
         self.disciplina_input = QComboBox(); self.disciplina_input.setEditable(True); form.addRow("Disciplina:", self.disciplina_input)
+        self.topico_input = QLineEdit(); self.topico_input.setPlaceholderText("Ex.: Redes, Gramática, Banco de Dados..."); form.addRow("Categoria / Assunto:", self.topico_input)
         self.banca_input = QComboBox(); self.banca_input.setEditable(True); form.addRow("Banca:", self.banca_input)
         self.ano_input = QLineEdit(); form.addRow("Ano:", self.ano_input)
         self.gabarito_input = QComboBox(); self.gabarito_input.addItems(["A", "B", "C", "D", "E", "Certo", "Errado"]); form.addRow("Gabarito (Obrigatório):", self.gabarito_input)
@@ -68,6 +69,7 @@ class ImportacaoPage(QWidget):
             if self.questoes_extraidas:
                 primeira = self.questoes_extraidas[0]
                 self.disciplina_input.setCurrentText(primeira.get("disciplina", ""))
+                self.topico_input.setText(primeira.get("topico", ""))
                 self.banca_input.setCurrentText(primeira.get("banca", ""))
                 if primeira.get("ano"):
                     self.ano_input.setText(str(primeira["ano"]))
@@ -168,6 +170,7 @@ class ImportacaoPage(QWidget):
         self.item_atual = item; q = self.questoes_extraidas[item.data(Qt.UserRole)]; self.painel_edicao.setDisabled(False); self.lbl_confianca.setText(f"<b>{q['confianca'].upper()}</b>")
         self.lbl_confianca.setStyleSheet("color: green;" if q["confianca"] == "alta" else "color: orange;"); texto = q["enunciado"]
         self.enunciado_input.setText(texto); self.tipo_combo.setCurrentText(q["tipo"])
+        self.topico_input.setText(q.get("topico", ""))
         self.alternativas_tabela.setEnabled(q["tipo"] == "multipla_escolha")
         for linha in range(self.alternativas_tabela.rowCount()):
             item_letra = self.alternativas_tabela.item(linha, 0)
@@ -191,7 +194,7 @@ class ImportacaoPage(QWidget):
                 texto = self.alternativas_tabela.item(linha, 1)
                 if texto and texto.text().strip():
                     alternativas.append({"letra": "ABCDE"[linha], "texto": texto.text().strip()})
-        dados = {"enunciado": self.enunciado_input.toPlainText(), "tipo": self.tipo_combo.currentText(), "alternativas": alternativas, "disciplina": self.disciplina_input.currentText(), "topico": "", "banca": self.banca_input.currentText(), "ano": int(self.ano_input.text()) if self.ano_input.text().isdigit() else None, "dificuldade": "media", "gabarito": self.gabarito_input.currentText()}
+        dados = {"enunciado": self.enunciado_input.toPlainText(), "tipo": self.tipo_combo.currentText(), "alternativas": alternativas, "disciplina": self.disciplina_input.currentText(), "topico": self.topico_input.text().strip(), "banca": self.banca_input.currentText(), "ano": int(self.ano_input.text()) if self.ano_input.text().isdigit() else None, "dificuldade": "media", "gabarito": self.gabarito_input.currentText()}
         try:
             repo.criar_questao(dados); row = self.lista_questoes.row(self.item_atual); self.lista_questoes.takeItem(row); self.painel_edicao.setDisabled(True); self.item_atual = None; logger.info("Questão importada salva"); QMessageBox.information(self, "Sucesso", "Questão salva no banco!")
         except Exception:
@@ -208,7 +211,7 @@ class ImportacaoPage(QWidget):
                 return
         try:
             for q in self.questoes_extraidas:
-                dados = {"enunciado": q["enunciado"], "tipo": q["tipo"], "alternativas": q.get("alternativas") or [], "disciplina": q.get("disciplina") or self.disciplina_input.currentText(), "topico": "", "banca": q.get("banca") or self.banca_input.currentText(), "ano": q.get("ano") or (int(self.ano_input.text()) if self.ano_input.text().isdigit() else None), "dificuldade": "media", "gabarito": q.get("gabarito")}
+                dados = {"enunciado": q["enunciado"], "tipo": q["tipo"], "alternativas": q.get("alternativas") or [], "disciplina": q.get("disciplina") or self.disciplina_input.currentText(), "topico": q.get("topico") or self.topico_input.text().strip(), "banca": q.get("banca") or self.banca_input.currentText(), "ano": q.get("ano") or (int(self.ano_input.text()) if self.ano_input.text().isdigit() else None), "dificuldade": "media", "gabarito": q.get("gabarito")}
                 repo.criar_questao(dados)
             self.lista_questoes.clear(); self.questoes_extraidas = []; self.painel_edicao.setDisabled(True)
             QMessageBox.information(self, "Sucesso", "Todas as questões foram salvas no banco!")

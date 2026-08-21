@@ -159,6 +159,7 @@ def parsear_questoes(texto: str) -> list[dict]:
             "gabarito": None,
             "confianca": confianca,
             "disciplina": metadados["disciplinas"].get(numero_questao, ""),
+            "topico": "",
             "banca": metadados["banca"],
             "ano": metadados["ano"],
         })

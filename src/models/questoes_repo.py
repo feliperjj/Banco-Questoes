@@ -67,6 +67,8 @@ def buscar_questoes(filtros: dict = None, texto: str = None) -> list[dict]:
         query = query.where(Questao.disciplina == filtros["disciplina"])
     if filtros and filtros.get("tipo"):
         query = query.where(Questao.tipo == filtros["tipo"])
+    if filtros and filtros.get("topico"):
+        query = query.where(Questao.topico == filtros["topico"])
     return [_questao_dict(questao) for questao in query]
 
 
@@ -97,6 +99,8 @@ def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int
         query = query.where(Questao.disciplina == filtros["disciplina"])
     if filtros and filtros.get("tipo"):
         query = query.where(Questao.tipo == filtros["tipo"])
+    if filtros and filtros.get("topico"):
+        query = query.where(Questao.topico == filtros["topico"])
     todas_questoes = [questao.id for questao in query]
     if not todas_questoes:
         return 0

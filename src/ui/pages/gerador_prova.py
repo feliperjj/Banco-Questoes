@@ -14,12 +14,14 @@ class GeradorProvaPage(QWidget):
         from PySide6.QtWidgets import QLineEdit
         self.nome_input = QLineEdit(); form.addRow("Nome da Prova:", self.nome_input)
         self.disciplina_input = QComboBox(); self.disciplina_input.addItem("Todas as disciplinas"); self.disciplina_input.addItems(repo.listar_disciplinas()); self.disciplina_input.setCurrentIndex(0); form.addRow("Filtro - Disciplina:", self.disciplina_input)
+        self.topico_input = QComboBox(); self.topico_input.addItem("Todas as categorias"); self.topico_input.addItems(repo.listar_topicos()); self.topico_input.setCurrentIndex(0); form.addRow("Filtro - Categoria:", self.topico_input)
         self.tipo_input = QComboBox(); self.tipo_input.addItem("Todos os tipos", ""); self.tipo_input.addItem("Múltipla escolha", "multipla_escolha"); self.tipo_input.addItem("Certo ou errado", "certo_errado"); form.addRow("Tipo de questão:", self.tipo_input)
         self.lbl_disponiveis = QLabel(); self.lbl_disponiveis.setObjectName("generator-availability"); form.addRow("Disponibilidade:", self.lbl_disponiveis)
         self.qtd_input = QSpinBox(); self.qtd_input.setRange(1, 200); self.qtd_input.setValue(10); form.addRow("Quantidade de Questões:", self.qtd_input)
         self.tempo_input = QSpinBox(); self.tempo_input.setRange(0, 600); self.tempo_input.setSpecialValueText("Sem limite"); form.addRow("Tempo Limite (min):", self.tempo_input)
         btn = QPushButton("Gerar Prova"); btn.clicked.connect(self.gerar_prova); form.addRow(btn); layout.addWidget(group)
         self.disciplina_input.currentTextChanged.connect(self._atualizar_disponibilidade)
+        self.topico_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.tipo_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
         self.tabela = QTableWidget(); self.tabela.setColumnCount(4); self.tabela.setHorizontalHeaderLabels(["ID", "Nome da Prova", "Qtd Questões", "Ação"]); self.tabela.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed); self.tabela.setColumnWidth(3, 146); self.tabela.horizontalHeaderItem(3).setTextAlignment(Qt.AlignCenter); layout.addWidget(self.tabela); self.carregar_provas(); self._atualizar_disponibilidade()
 
@@ -30,6 +32,8 @@ class GeradorProvaPage(QWidget):
         disciplina = self.disciplina_input.currentText().strip()
         tipo = self.tipo_input.currentData()
         if disciplina and disciplina != "Todas as disciplinas": filtros["disciplina"] = disciplina
+        topico = self.topico_input.currentText().strip()
+        if topico and topico != "Todas as categorias": filtros["topico"] = topico
         if tipo: filtros["tipo"] = tipo
         prova_id = repo.criar_prova(nome, filtros, self.qtd_input.value(), self.tempo_input.value() or None)
         if prova_id == 0: QMessageBox.warning(self, "Aviso", "Nenhuma questão encontrada com estes filtros. A prova não foi criada.")
@@ -40,6 +44,9 @@ class GeradorProvaPage(QWidget):
         filtros = {}
         if disciplina and disciplina != "Todas as disciplinas":
             filtros["disciplina"] = disciplina
+        topico = self.topico_input.currentText().strip()
+        if topico and topico != "Todas as categorias":
+            filtros["topico"] = topico
         if self.tipo_input.currentData():
             filtros["tipo"] = self.tipo_input.currentData()
         total = len(repo.buscar_questoes(filtros))
