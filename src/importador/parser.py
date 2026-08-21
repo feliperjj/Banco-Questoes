@@ -6,10 +6,15 @@ import unicodedata
 logger = logging.getLogger(__name__)
 
 _INICIO_QUESTAO = re.compile(
-    r"(?im)^((?:quest(?:ão|ao)\s*)?\d{1,3}(?:\s*[.\-):]\s+|\s*\n))"
+    # Alguns PDFs exportam "QUESTÃO" como "QUEST�O" (caractere de
+    # substituição). O marcador precisa continuar reconhecível mesmo assim.
+    r"(?im)^((?:quest(?:ão|ao|�o)\s*)?\d{1,3}(?:\s*[.\-):]\s+|\s*\n))"
 )
 _INICIO_ALTERNATIVA = re.compile(r"(?im)^[ \t]*\(?([A-E])\)?\s*[.\-):]\s+")
 _INICIO_NUMERADO = re.compile(r"(?im)^[ \t]*(\d{1,3})\s+.+$")
+_INICIO_QUESTAO_NOMEADA = re.compile(
+    r"(?im)^((?:quest(?:ão|ao|�o)\s+\d{1,3})(?:\s*[.\-):]|\s*\n))"
+)
 _SECOES_DISCIPLINA = re.compile(
     r"(?i)^(língua portuguesa|matemática|língua inglesa|conhecimentos gerais|"
     r"conhecimentos específicos|informática|direito(?: constitucional| administrativo)?|"
@@ -101,9 +106,15 @@ def parsear_questoes(texto: str) -> list[dict]:
         return []
     metadados = extrair_metadados_prova(texto)
 
-    blocos_sem_pontuacao = _separar_itens_cespe(texto)
+    # Quando o PDF traz marcadores explícitos ("QUESTÃO 1"), eles têm
+    # prioridade. Números soltos também aparecem em textos-base e não podem
+    # ativar o modo CESPE por engano.
+    tem_marcadores_nomeados = bool(_INICIO_QUESTAO_NOMEADA.search(texto))
+    blocos_sem_pontuacao = [] if tem_marcadores_nomeados else _separar_itens_cespe(texto)
     if blocos_sem_pontuacao:
         blocos = blocos_sem_pontuacao
+    elif tem_marcadores_nomeados:
+        blocos = _INICIO_QUESTAO_NOMEADA.split(texto)
     else:
         blocos = _INICIO_QUESTAO.split(texto)
     # split() devolve o texto antes do primeiro marcador e, depois, pares marcador/conteúdo.
@@ -118,7 +129,7 @@ def parsear_questoes(texto: str) -> list[dict]:
     questoes = []
     for numero_questao, bloco in enumerate(candidatos, 1):
         bloco = bloco.strip()
-        marcador = re.match(r"(?i)^(?:quest(?:ão|ao)\s*)?\d{1,3}(?:\s*[.\-):]\s+|\s*\n)", bloco)
+        marcador = re.match(r"(?i)^(?:quest(?:ão|ao|�o)\s*)?\d{1,3}(?:\s*[.\-):]\s+|\s*\n)", bloco)
         if not marcador:
             marcador = re.match(r"^\s*\d{1,3}\s+", bloco)
         if marcador:
