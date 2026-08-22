@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, 
 
 import src.models.questoes_repo as repo
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
+from src.importador.lote import aplicar_classificacao_as_questoes, aplicar_gabarito_as_questoes, parsear_gabarito_em_lote
 from src.importador.parser import parsear_questoes
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ class ImportacaoPage(QWidget):
     def selecionar_arquivo(self):
         caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar Prova", "", "Arquivos (*.pdf *.docx)")
         if not caminho: return
-        self.lbl_arquivo.setText(os.path.basename(caminho)); self.lista_questoes.clear(); self.painel_edicao.setDisabled(True); self.caminho_questoes = caminho
+        self.lbl_arquivo.setText(os.path.basename(caminho)); self.lista_questoes.clear(); self.painel_edicao.setDisabled(True); self.caminho_questoes = caminho; self.questoes_extraidas = []; self.item_atual = None
         try:
             self.questoes_extraidas = parsear_questoes(extrair_texto(caminho))
             self.classificacao_inicio.setMaximum(max(1, len(self.questoes_extraidas)))
@@ -142,10 +143,13 @@ class ImportacaoPage(QWidget):
         if not gabaritos:
             QMessageBox.warning(self, "Gabarito escaneado", "Este PDF não possui texto selecionável. Cole a sequência de respostas no campo de gabarito em lote.")
             return
-        for numero, q in enumerate(self.questoes_extraidas, 1):
+        for linha in range(self.lista_questoes.count()):
+            item = self.lista_questoes.item(linha)
+            indice = item.data(Qt.UserRole)
+            numero = indice + 1
             if numero in gabaritos:
+                q = self.questoes_extraidas[indice]
                 q["gabarito"] = gabaritos[numero]
-                item = self.lista_questoes.item(numero - 1)
                 item.setText(f"Q{numero} [{q['confianca'].upper()}] - {q['gabarito']} - {' '.join(q['enunciado'].split()[:6])}...")
         self.lbl_arquivo.setText(f"{self.lbl_arquivo.text()} | gabarito: {os.path.basename(self.caminho_gabarito)}")
         if self.item_atual:
@@ -165,13 +169,16 @@ class ImportacaoPage(QWidget):
         if not self.questoes_extraidas:
             QMessageBox.warning(self, "Aviso", "Selecione primeiro o PDF das questões.")
             return
-        tokens = re.findall(r"(?:CERTO|ERRADO|C|E|[A-E])", self.gabarito_lote_input.text().upper())
+        tokens = parsear_gabarito_em_lote(self.gabarito_lote_input.text())
         if len(tokens) != len(self.questoes_extraidas):
             QMessageBox.warning(self, "Quantidade diferente", f"Foram encontradas {len(tokens)} respostas para {len(self.questoes_extraidas)} questões.")
             return
-        for numero, (q, token) in enumerate(zip(self.questoes_extraidas, tokens), 1):
-            q["gabarito"] = {"C": "Certo", "E": "Errado", "CERTO": "Certo", "ERRADO": "Errado"}.get(token, token)
-            item = self.lista_questoes.item(numero - 1)
+        aplicar_gabarito_as_questoes(self.questoes_extraidas, tokens)
+        for linha in range(self.lista_questoes.count()):
+            item = self.lista_questoes.item(linha)
+            indice = item.data(Qt.UserRole)
+            numero = indice + 1
+            q = self.questoes_extraidas[indice]
             item.setText(f"Q{numero} [{q['confianca'].upper()}] - {q['gabarito']} - {' '.join(q['enunciado'].split()[:6])}...")
         if self.item_atual:
             self.carregar_edicao(self.item_atual)
@@ -191,10 +198,9 @@ class ImportacaoPage(QWidget):
         if not disciplina:
             QMessageBox.warning(self, "Disciplina obrigatória", "Informe a disciplina do bloco.")
             return
+        quantidade = aplicar_classificacao_as_questoes(self.questoes_extraidas, inicio, fim, disciplina, categoria)
         for numero in range(inicio, min(fim, len(self.questoes_extraidas)) + 1):
             questao = self.questoes_extraidas[numero - 1]
-            questao["disciplina"] = disciplina
-            questao["topico"] = categoria
             item = self.lista_questoes.item(numero - 1)
             if item:
                 resumo = " ".join(questao["enunciado"].split()[:5])
@@ -203,7 +209,7 @@ class ImportacaoPage(QWidget):
         self.topico_input.setText(categoria)
         if self.item_atual:
             self.carregar_edicao(self.item_atual)
-        QMessageBox.information(self, "Classificação aplicada", f"{fim - inicio + 1} questão(ões) classificadas em lote.")
+        QMessageBox.information(self, "Classificação aplicada", f"{quantidade} questão(ões) classificadas em lote.")
 
     def carregar_edicao(self, item):
         self.item_atual = item; q = self.questoes_extraidas[item.data(Qt.UserRole)]; self.painel_edicao.setDisabled(False); self.lbl_confianca.setText(f"<b>{q['confianca'].upper()}</b>")
@@ -249,10 +255,12 @@ class ImportacaoPage(QWidget):
             if resposta != QMessageBox.Yes:
                 return
         try:
+            questoes = []
             for q in self.questoes_extraidas:
                 dados = {"enunciado": q["enunciado"], "tipo": q["tipo"], "alternativas": q.get("alternativas") or [], "disciplina": q.get("disciplina") or self.disciplina_input.currentText(), "topico": q.get("topico") or self.topico_input.text().strip(), "banca": q.get("banca") or self.banca_input.currentText(), "ano": q.get("ano") or (int(self.ano_input.text()) if self.ano_input.text().isdigit() else None), "dificuldade": "media", "gabarito": q.get("gabarito")}
-                repo.criar_questao(dados)
-            self.lista_questoes.clear(); self.questoes_extraidas = []; self.painel_edicao.setDisabled(True)
+                questoes.append(dados)
+            repo.criar_questoes_em_lote(questoes)
+            self.lista_questoes.clear(); self.questoes_extraidas = []; self.item_atual = None; self.painel_edicao.setDisabled(True)
             QMessageBox.information(self, "Sucesso", "Todas as questões foram salvas no banco!")
         except Exception:
             logger.exception("Erro ao salvar questões importadas em lote")

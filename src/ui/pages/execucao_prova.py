@@ -1,7 +1,7 @@
 import logging
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 import src.models.questoes_repo as repo
 import src.models.revisao_service as revisao_svc
@@ -48,13 +48,27 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_enunciado = QTextEdit()
         self.lbl_enunciado.setObjectName("exam-statement")
         self.lbl_enunciado.setReadOnly(True)
+        self.lbl_enunciado.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.lbl_enunciado.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lbl_enunciado.setMinimumHeight(90)
+        self.lbl_enunciado.setMaximumHeight(220)
         cartao_layout.addWidget(self.lbl_enunciado)
         self.alternativas_frame = QFrame()
         self.alternativas_frame.setObjectName("exam-options-card")
+        self.alternativas_frame.setMinimumWidth(0)
         self.alternativas_layout = QVBoxLayout(self.alternativas_frame)
         self.alternativas_layout.setContentsMargins(12, 10, 12, 10)
         self.alternativas_layout.setSpacing(8)
-        cartao_layout.addWidget(self.alternativas_frame)
+        self.grupo_botoes = QButtonGroup(self)
+        self.grupo_botoes.setExclusive(True)
+        self.alternativas_scroll = QScrollArea()
+        self.alternativas_scroll.setObjectName("exam-options-scroll")
+        self.alternativas_scroll.setWidgetResizable(True)
+        self.alternativas_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.alternativas_scroll.setMinimumHeight(76)
+        self.alternativas_scroll.setMaximumHeight(360)
+        self.alternativas_scroll.setWidget(self.alternativas_frame)
+        cartao_layout.addWidget(self.alternativas_scroll)
         self.layout.addWidget(self.cartao_questao, 1)
 
         nav = QHBoxLayout()
@@ -81,27 +95,60 @@ class ExecucaoProvaPage(QWidget):
         self.idx_atual = 0
         self.respostas_memoria = {}
         self.tempo_gasto = 0
+        self.tempo_limite_seg = 0
+        self.em_andamento = False
+        self._mostrar_estado_inicial()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Ao voltar para esta aba depois de finalizar, nunca reutilize o
+        # enunciado/alternativas da tentativa anterior.
+        if not self.em_andamento:
+            self._mostrar_estado_inicial()
+
+    def _mostrar_estado_inicial(self):
+        self.timer.stop()
+        self.lbl_info.setText("Nenhuma prova em andamento")
+        self.lbl_progresso.setText("Escolha uma prova para começar")
+        self.lbl_tipo_questao.setText("MODO PROVA")
+        self.lbl_enunciado.setText("Suas questões aparecerão aqui quando você iniciar uma prova.")
+        self.limpar_alternativas()
+        self.btn_anterior.setEnabled(False)
+        self.btn_proxima.setEnabled(False)
+        self.btn_finalizar.setEnabled(False)
+        self.barra_progresso.setRange(0, 1)
+        self.barra_progresso.setValue(0)
+        self.lbl_tempo.setText("00:00")
 
     def iniciar(self, prova_id, nome_prova):
+        if self.em_andamento:
+            QMessageBox.information(self, "Prova em andamento", "Finalize a prova atual antes de iniciar outra.")
+            return
         self.prova_id = prova_id
         self.questoes = repo.buscar_questoes_da_prova(prova_id)
         if not self.questoes:
             QMessageBox.critical(self, "Erro", "Esta prova não possui questões.")
             return
         self.tentativa_id = repo.iniciar_tentativa(prova_id)
+        configuracao = repo.obter_prova(prova_id) or {}
+        self.tempo_limite_seg = max(0, int(configuracao.get("tempo_limite_min") or 0)) * 60
         self.lbl_info.setText(f"{nome_prova}  ·  {len(self.questoes)} questões")
         self.idx_atual = 0
         self.respostas_memoria = {}
         self.tempo_gasto = 0
+        self.em_andamento = True
         self.lbl_tempo.setText("00:00")
         self.barra_progresso.setRange(0, len(self.questoes))
         self.timer.start(1000)
+        self.btn_finalizar.setEnabled(True)
         self.mostrar_questao_atual()
         logger.info("Tentativa %s iniciada para prova %s", self.tentativa_id, prova_id)
 
     def atualizar_tempo(self):
         self.tempo_gasto += 1
         self.lbl_tempo.setText(f"{self.tempo_gasto // 60:02d}:{self.tempo_gasto % 60:02d}")
+        if self.tempo_limite_seg and self.tempo_gasto >= self.tempo_limite_seg:
+            self._finalizar_tentativa_automaticamente()
 
     def limpar_alternativas(self):
         for button in self.grupo_botoes.buttons():
@@ -124,14 +171,37 @@ class ExecucaoProvaPage(QWidget):
         if not opcoes:
             opcoes = [(letra, letra) for letra in "ABCDE"]
         for valor, rotulo in opcoes:
-            rb = QRadioButton(rotulo)
-            rb.setObjectName("exam-option")
-            self.alternativas_layout.addWidget(rb)
+            option_row = QFrame()
+            option_row.setObjectName("exam-option")
+            option_row.setMinimumWidth(0)
+            option_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            option_layout = QHBoxLayout(option_row)
+            option_layout.setContentsMargins(12, 8, 12, 8)
+            option_layout.setSpacing(10)
+            rb = QRadioButton()
+            rb.setObjectName("exam-option-toggle")
+            rb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            label = QLabel(rotulo)
+            label.setObjectName("exam-option-label")
+            label.setWordWrap(True)
+            label.setMinimumWidth(0)
+            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+            option_layout.addWidget(rb)
+            option_layout.addWidget(label, 1)
+            self.alternativas_layout.addWidget(option_row)
+            self.grupo_botoes.addButton(rb)
             if self.respostas_memoria.get(q["id"]) == valor:
                 rb.setChecked(True)
             rb.toggled.connect(lambda checked, o=valor, qid=q["id"]: self.salvar_resposta_temp(checked, qid, o))
+            rb.toggled.connect(lambda checked, row=option_row: self._marcar_opcao(row, checked))
         self.btn_anterior.setEnabled(self.idx_atual > 0)
         self.btn_proxima.setEnabled(self.idx_atual < len(self.questoes) - 1)
+
+    @staticmethod
+    def _marcar_opcao(row, selecionada):
+        row.setProperty("selected", selecionada)
+        row.style().unpolish(row)
+        row.style().polish(row)
 
     def salvar_resposta_temp(self, checked, q_id, opcao):
         if checked:
@@ -148,9 +218,20 @@ class ExecucaoProvaPage(QWidget):
             self.mostrar_questao_atual()
 
     def confirmar_finalizacao(self):
+        if not self.em_andamento or not self.tentativa_id:
+            return
         if len(self.respostas_memoria) < len(self.questoes) and QMessageBox.question(self, "Aviso", "Existem questões sem resposta. Deseja finalizar mesmo assim?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
             return
         self.timer.stop()
+        self._finalizar_tentativa()
+
+    def _finalizar_tentativa_automaticamente(self):
+        if not self.em_andamento or not self.tentativa_id:
+            return
+        self.timer.stop()
+        self._finalizar_tentativa()
+
+    def _finalizar_tentativa(self):
         resultado = repo.finalizar_tentativa(self.tentativa_id, self.respostas_memoria, self.tempo_gasto)
         for errada in resultado["erradas"]:
             revisao_svc.registrar_erro(errada["id"])
@@ -162,5 +243,13 @@ class ExecucaoProvaPage(QWidget):
         if resultado["erradas"]:
             msg += "\n\nQuestões erradas:" + "".join(f"\n- Q_ID {e['id']} (Marcada: {e['marcada']} | Correta: {e['correta']})" for e in resultado["erradas"][:5])
         QMessageBox.information(self, "Resultado", msg)
+        self.prova_id = None
+        self.tentativa_id = None
+        self.questoes = []
+        self.respostas_memoria = {}
+        self.idx_atual = 0
+        self.tempo_limite_seg = 0
+        self.em_andamento = False
+        self._mostrar_estado_inicial()
         if self.parentWidget() and hasattr(self.parentWidget(), "setCurrentIndex"):
             self.parentWidget().setCurrentIndex(3)

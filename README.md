@@ -137,6 +137,8 @@ venv\Scripts\python.exe -m compileall -q src
 
 O projeto utiliza PySide6 na interface, Peewee para persistência, SQLite como banco local e `pdfplumber`/RapidOCR no pipeline de importação.
 
+Antes de alterar comportamento existente, consulte o [cérebro do projeto](docs/PROJECT_BRAIN.md). Ele documenta os fluxos, contratos entre camadas, invariantes do banco, estados da UI e a matriz de regressão manual.
+
 ## Licença
 
 Este projeto ainda não possui uma licença pública definida. Consulte o autor antes de redistribuir o código ou as imagens de provas.

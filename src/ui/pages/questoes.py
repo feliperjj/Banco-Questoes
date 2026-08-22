@@ -77,8 +77,12 @@ class QuestoesPage(QWidget):
         btn_nova = QPushButton("Nova Questão"); btn_nova.clicked.connect(self.abrir_nova_questao)
         top.addWidget(self.busca_input); top.addWidget(btn_nova); layout.addLayout(top)
         self.tabela = QTableWidget(); self.tabela.setColumnCount(6); self.tabela.setHorizontalHeaderLabels(["ID", "Enunciado", "Disciplina", "Banca", "Ano", "Dificuldade"])
-        self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.setSelectionBehavior(QTableWidget.SelectRows); self.tabela.setEditTriggers(QTableWidget.NoEditTriggers); self.tabela.doubleClicked.connect(self.abrir_edicao_questao)
+        self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.setSelectionBehavior(QTableWidget.SelectRows); self.tabela.setEditTriggers(QTableWidget.NoEditTriggers); self.tabela.setAlternatingRowColors(True); self.tabela.setShowGrid(False); self.tabela.verticalHeader().setVisible(False); self.tabela.verticalHeader().setDefaultSectionSize(42); self.tabela.doubleClicked.connect(self.abrir_edicao_questao)
         layout.addWidget(self.tabela); self.carregar_dados()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.carregar_dados()
 
     def carregar_dados(self):
         questoes = repo.buscar_questoes(texto=self.busca_input.text()); self.tabela.setRowCount(len(questoes))

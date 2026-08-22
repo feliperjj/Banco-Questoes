@@ -8,17 +8,34 @@ logger = logging.getLogger(__name__)
 _INICIO_QUESTAO = re.compile(
     # Alguns PDFs exportam "QUESTÃO" como "QUEST�O" (caractere de
     # substituição). O marcador precisa continuar reconhecível mesmo assim.
-    r"(?im)^((?:quest(?:ão|ao|�o)\s*)?\d{1,3}(?:\s*[.\-):]\s+|\s*\n))"
+    r"(?im)^((?:quest(?:ão|ao|�o)[ \t]*)?\d{1,3}(?:[ \t]*[.\-):][ \t]*|[ \t]+|[ \t]*\n))"
 )
 _INICIO_ALTERNATIVA = re.compile(r"(?im)^[ \t]*\(?([A-E])\)?\s*[.\-):]\s+")
-_INICIO_NUMERADO = re.compile(r"(?im)^[ \t]*(\d{1,3})\s+.+$")
+_INICIO_NUMERADO = re.compile(r"(?im)^[ \t]*(\d{1,3})(?:[.\-):][ \t]*|[ \t]+).+$")
 _INICIO_QUESTAO_NOMEADA = re.compile(
-    r"(?im)^((?:quest(?:ão|ao|�o)\s+\d{1,3})(?:\s*[.\-):]|\s*\n))"
+    r"(?im)^((?:quest(?:ão|ao|�o)[ \t]+\d{1,3})(?:[ \t]*[.\-):]|[ \t]*\n))"
 )
-_SECOES_DISCIPLINA = re.compile(
-    r"(?i)^(língua portuguesa|matemática|língua inglesa|conhecimentos gerais|"
-    r"conhecimentos específicos|informática|direito(?: constitucional| administrativo)?|"
-    r"raciocínio lógico|contabilidade|administração|auditoria|legislação|atualidades)$"
+_DISCIPLINAS = (
+    ("Língua Portuguesa", r"l(?:í|i|�)ngua portuguesa"),
+    ("Matemática", r"matem(?:á|a|�)tica"),
+    ("Língua Inglesa", r"l(?:í|i|�)ngua inglesa"),
+    ("Conhecimentos Gerais", r"conhecimentos gerais"),
+    ("Conhecimentos Específicos", r"conhecimentos espec(?:í|i|�)ficos"),
+    ("Informática", r"inform(?:á|a|�)tica"),
+    ("Direito Constitucional", r"direito constitucional"),
+    ("Direito Administrativo", r"direito administrativo"),
+    ("Raciocínio Lógico", r"racioc(?:í|i|�)nio l(?:ó|o|�)gico"),
+    ("Raciocínio Lógico e Matemática", r"racioc(?:í|i|�)nio l(?:ó|o|�)gico e matem(?:á|a|�)tica"),
+    ("Contabilidade", r"contabilidade"),
+    ("Administração", r"administra(?:ç|c|�)(?:ão|ao|�o)"),
+    ("Auditoria", r"auditoria"),
+    ("Legislação", r"legisla(?:ç|c|�)(?:ão|ao|�o)"),
+    ("Atualidades", r"atualidades"),
+)
+_SECAO_CONTAGEM = re.compile(r"\s*\|\s*\d+\s*quest(?:ão|ões|ao|oes|�o|�es).*$", re.IGNORECASE)
+_MARCADOR_QUESTAO = re.compile(r"(?i)^(?:quest(?:ão|ao|�o)[ \t]*)?(\d{1,3})(?:[ \t]*[.\-):][ \t]*|[ \t]+|[ \t]*\n)")
+_MARCADOR_INLINE = re.compile(
+    r"(?<!^)(?<!\n)[ \t]+(?=(?:(?i:quest(?:ão|ao|�o))[ \t]*)?\d{1,3}[)\-.:][ \t]+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ�])",
 )
 
 
@@ -31,6 +48,54 @@ def _normalizar_texto(texto: str) -> str:
 
 def _juntar_linhas(texto: str) -> str:
     return re.sub(r"\s+", " ", texto).strip()
+
+
+def _quebrar_marcadores_inline(texto: str) -> str:
+    return _MARCADOR_INLINE.sub("\n", texto)
+
+
+def _disciplina_da_linha(linha: str) -> str:
+    linha = _SECAO_CONTAGEM.sub("", linha.strip())
+    for nome, padrao in _DISCIPLINAS:
+        if re.fullmatch(padrao, linha, re.IGNORECASE):
+            return nome
+    return ""
+
+
+def _tem_marcador_questao_perto(linhas: list[str], indice: int, limite=12) -> bool:
+    for linha in linhas[indice + 1:indice + 1 + limite]:
+        linha = linha.strip()
+        if _parece_grade_respostas(linha):
+            continue
+        # A distribuição "1 a 10" e as instruções numeradas "02 - ..."
+        # aparecem no front matter de cadernos FGV e não são questões.
+        if re.match(r"(?i)^\d{1,3}\s+a\s+\d{1,3}\b", linha) or re.match(r"^\d{1,2}\s*[-–:]\s+", linha):
+            continue
+        if _MARCADOR_QUESTAO.match(linha):
+            return True
+    return False
+
+
+def _remover_front_matter(texto: str) -> str:
+    linhas = texto.splitlines(True)
+    posicao = 0
+    for indice, linha_com_quebra in enumerate(linhas):
+        linha = linha_com_quebra.strip()
+        disciplina = _disciplina_da_linha(linha)
+        # Em alguns cadernos FGV o cargo aparece isolado na primeira linha
+        # (por exemplo, "ADMINISTRAÇÃO") e não é uma seção de questões.
+        # Não use esse título para cortar o front matter antes das instruções.
+        titulo_inicial = indice < 3 and disciplina == "Administração"
+        if disciplina and not titulo_inicial and (_SECAO_CONTAGEM.search(linha) or _tem_marcador_questao_perto(linhas, indice)):
+            return texto[posicao:].strip()
+        posicao += len(linha_com_quebra)
+    return texto
+
+
+def _parece_grade_respostas(linha: str) -> bool:
+    numeros = re.findall(r"\b\d{1,3}\b", linha)
+    palavras = re.findall(r"[A-Za-zÀ-ÿ�]{3,}", linha)
+    return len(numeros) >= 5 and not palavras
 
 
 def extrair_metadados_prova(texto: str) -> dict:
@@ -56,13 +121,18 @@ def extrair_metadados_prova(texto: str) -> dict:
     numero_pendente = None
     for linha in texto.splitlines():
         linha = linha.strip()
-        marcador = re.fullmatch(r"(\d{1,3})", linha)
+        disciplina = _disciplina_da_linha(linha)
+        if disciplina:
+            disciplina_atual = disciplina
+            numero_pendente = None
+            continue
+        marcador = re.fullmatch(r"(\d{1,3})[.\-):]?", linha)
         if marcador:
             numero_pendente = int(marcador.group(1))
             continue
-        secao = _SECOES_DISCIPLINA.match(linha)
-        if secao:
-            disciplina_atual = secao.group(1)
+        marcador_inicio = _MARCADOR_QUESTAO.match(linha)
+        if marcador_inicio and disciplina_atual and not _parece_grade_respostas(linha):
+            disciplinas[int(marcador_inicio.group(1))] = disciplina_atual
             continue
         if numero_pendente is not None and disciplina_atual:
             disciplinas[numero_pendente] = disciplina_atual
@@ -83,7 +153,10 @@ def extrair_metadados_prova(texto: str) -> dict:
 
 def _separar_itens_cespe(texto: str) -> list[str]:
     """Separa itens CESPE, ignorando números de linha dos textos-base."""
-    candidatos = list(_INICIO_NUMERADO.finditer(texto))
+    candidatos = [
+        candidato for candidato in _INICIO_NUMERADO.finditer(texto)
+        if not _parece_grade_respostas(candidato.group(0))
+    ]
     if not candidatos:
         return []
 
@@ -95,20 +168,36 @@ def _separar_itens_cespe(texto: str) -> list[str]:
         if "JUSTIFICATIVA" in bloco.upper():
             blocos_reais.append(bloco)
 
-    # Algumas fontes não trazem justificativa. Nesse caso, aproveita uma sequência
-    # crescente de números de item como fallback, descartando números de linha.
+    # Algumas fontes não trazem justificativa. Nesse caso, aproveita a
+    # sequência numerada principal como fallback. Em PDFs de duas colunas a
+    # ordem de leitura pode intercalar números de texto-base (por exemplo,
+    # 1, 2, 3, 4, 10, 5, 25, 11...). Consolidar a primeira ocorrência de cada
+    # número a partir do primeiro item 1 recupera a sequência sem duplicar
+    # blocos discursivos posteriores.
     if len(blocos_reais) < 2:
-        sequencia = []
-        esperado = 1
-        for candidato in candidatos:
-            numero = int(candidato.group(1))
-            if numero == esperado:
-                sequencia.append(candidato)
-                esperado += 1
-        blocos_reais = []
-        for indice, candidato in enumerate(sequencia):
-            fim = sequencia[indice + 1].start() if indice + 1 < len(sequencia) else len(texto)
-            blocos_reais.append(texto[candidato.start():fim].strip())
+        inicio = next((indice for indice, candidato in enumerate(candidatos) if int(candidato.group(1)) == 1), None)
+        sequencia_por_numero = {}
+        if inicio is not None:
+            for candidato in candidatos[inicio:]:
+                numero = int(candidato.group(1))
+                if numero >= 1:
+                    sequencia_por_numero.setdefault(numero, candidato)
+
+        maior_prefixo = 0
+        while maior_prefixo + 1 in sequencia_por_numero:
+            maior_prefixo += 1
+        selecionados = {
+            numero: sequencia_por_numero[numero]
+            for numero in range(1, maior_prefixo + 1)
+        }
+        # O fim do bloco é determinado pela ordem física do PDF, enquanto a
+        # saída volta à ordem numérica oficial.
+        por_posicao = sorted(selecionados.items(), key=lambda item: item[1].start())
+        blocos_por_numero = {}
+        for indice, (numero, candidato) in enumerate(por_posicao):
+            fim = por_posicao[indice + 1][1].start() if indice + 1 < len(por_posicao) else len(texto)
+            blocos_por_numero[numero] = texto[candidato.start():fim].strip()
+        blocos_reais = [blocos_por_numero[numero] for numero in range(1, maior_prefixo + 1)]
     return blocos_reais
 
 
@@ -116,19 +205,22 @@ def parsear_questoes(texto: str) -> list[dict]:
     texto = _normalizar_texto(texto)
     if not texto:
         return []
+    texto = _quebrar_marcadores_inline(texto)
     metadados = extrair_metadados_prova(texto)
+    texto_questoes = _remover_front_matter(texto)
 
     # Quando o PDF traz marcadores explícitos ("QUESTÃO 1"), eles têm
     # prioridade. Números soltos também aparecem em textos-base e não podem
     # ativar o modo CESPE por engano.
-    tem_marcadores_nomeados = bool(_INICIO_QUESTAO_NOMEADA.search(texto))
-    blocos_sem_pontuacao = [] if tem_marcadores_nomeados else _separar_itens_cespe(texto)
+    tem_marcadores_nomeados = bool(_INICIO_QUESTAO_NOMEADA.search(texto_questoes))
+    tem_alternativas = len(_INICIO_ALTERNATIVA.findall(texto_questoes)) >= 2
+    blocos_sem_pontuacao = [] if tem_marcadores_nomeados or tem_alternativas else _separar_itens_cespe(texto_questoes)
     if blocos_sem_pontuacao:
         blocos = blocos_sem_pontuacao
     elif tem_marcadores_nomeados:
-        blocos = _INICIO_QUESTAO_NOMEADA.split(texto)
+        blocos = _INICIO_QUESTAO_NOMEADA.split(texto_questoes)
     else:
-        blocos = _INICIO_QUESTAO.split(texto)
+        blocos = _INICIO_QUESTAO.split(texto_questoes)
     # split() devolve o texto antes do primeiro marcador e, depois, pares marcador/conteúdo.
     candidatos = []
     if blocos_sem_pontuacao:
@@ -141,9 +233,8 @@ def parsear_questoes(texto: str) -> list[dict]:
     questoes = []
     for numero_questao, bloco in enumerate(candidatos, 1):
         bloco = bloco.strip()
-        marcador = re.match(r"(?i)^(?:quest(?:ão|ao|�o)\s*)?\d{1,3}(?:\s*[.\-):]\s+|\s*\n)", bloco)
-        if not marcador:
-            marcador = re.match(r"^\s*\d{1,3}\s+", bloco)
+        marcador = _MARCADOR_QUESTAO.match(bloco)
+        numero_real = int(marcador.group(1)) if marcador else numero_questao
         if marcador:
             bloco = bloco[marcador.end():].strip()
         bloco = re.split(r"\s+JUSTIFICATIVA\s*[-–:]?", bloco, maxsplit=1, flags=re.IGNORECASE)[0].strip()
@@ -156,6 +247,12 @@ def parsear_questoes(texto: str) -> list[dict]:
                 if texto_alternativa:
                     alternativas.append({"letra": partes[indice].upper(), "texto": texto_alternativa})
 
+        # Em cadernos de múltipla escolha, números de parágrafos/textos-base
+        # também parecem marcadores de questão. Esses blocos não possuem
+        # alternativas e devem ser descartados; manteríamos texto-base como
+        # falsas questões, especialmente no layout de duas colunas da FGV.
+        if tem_alternativas and not alternativas:
+            continue
         if len(enunciado) < 10:
             continue
         if alternativas:
@@ -163,14 +260,14 @@ def parsear_questoes(texto: str) -> list[dict]:
             confianca = "alta" if len(alternativas) >= 4 else "media"
         else:
             tipo = "certo_errado"
-            confianca = "media" if len(enunciado) >= 30 else "baixa"
+            confianca = "alta" if len(enunciado) >= 80 else ("media" if len(enunciado) >= 30 else "baixa")
         questoes.append({
             "enunciado": enunciado,
             "tipo": tipo,
             "alternativas": alternativas or None,
             "gabarito": None,
             "confianca": confianca,
-            "disciplina": metadados["disciplinas"].get(numero_questao, ""),
+            "disciplina": metadados["disciplinas"].get(numero_real, ""),
             "topico": "",
             "banca": metadados["banca"],
             "ano": metadados["ano"],

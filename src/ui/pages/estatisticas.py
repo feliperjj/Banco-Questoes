@@ -127,6 +127,10 @@ class EstatisticasPage(QWidget):
             self.tabela_erros.setItem(row, 2, QTableWidgetItem(str(q["erros"])))
             self.tabela_erros.setRowHeight(row, 42)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.carregar_dados()
+
     @staticmethod
     def _estilizar_eixo(ax, titulo):
         ax.set_title(titulo, loc="left", color="#24324a", fontsize=12, fontweight="bold", pad=12)

@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget, QVBoxLayout, QWidget, QSizePolicy
 
 from src.ui.pages.dashboard import DashboardPage
 from src.ui.pages.execucao_prova import ExecucaoProvaPage
@@ -13,8 +13,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Banco de Questões")
-        self.resize(1000, 700)
+        self.setMinimumSize(960, 640)
+        self.resize(1180, 760)
         main_widget = QWidget()
+        main_widget.setMinimumSize(0, 0)
         layout = QHBoxLayout(main_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -41,6 +43,8 @@ class MainWindow(QMainWindow):
 
         self.pages = QStackedWidget()
         self.pages.setObjectName("content-pages")
+        self.pages.setMinimumSize(0, 0)
+        self.pages.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         paginas = {
             "Dashboard": DashboardPage(),
             "Questões": QuestoesPage(),
@@ -51,9 +55,11 @@ class MainWindow(QMainWindow):
             "Revisão": RevisaoPage(),
         }
         for nome, widget in paginas.items():
+            widget.setMinimumSize(0, 0)
             self.menu.addItem(nome)
             self.pages.addWidget(widget)
         self.menu.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.menu.setCurrentRow(0)
         layout.addWidget(sidebar)
         layout.addWidget(self.pages)
         self.setCentralWidget(main_widget)

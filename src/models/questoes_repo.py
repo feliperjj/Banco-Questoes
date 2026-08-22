@@ -9,6 +9,9 @@ from src.db.database import db, init_db
 from src.db.models import Alternativa, Prova, ProvaQuestao, Questao, Resposta, RevisaoEspacada, Tentativa
 
 
+CAMPOS_QUESTAO = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario")
+
+
 def _as_dict(model, fields=None):
     names = fields or [field.name for field in model._meta.sorted_fields]
     return {name: _legacy_value(getattr(model, name)) for name in names}
@@ -21,6 +24,13 @@ def _legacy_value(value):
     return value
 
 
+def _tempo_limite_da_configuracao(configuracao: dict) -> int:
+    try:
+        return max(0, int(configuracao.get("_tempo_limite_min") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _questao_dict(questao):
     dados = _as_dict(questao)
     if questao.tipo == "multipla_escolha":
@@ -28,29 +38,44 @@ def _questao_dict(questao):
     return dados
 
 
+def _criar_questao_sem_transacao(dados: dict) -> int:
+    questao = Questao.create(**{campo: dados.get(campo) for campo in CAMPOS_QUESTAO})
+    if questao.tipo == "multipla_escolha":
+        for alt in dados.get("alternativas") or []:
+            Alternativa.create(questao=questao.id, letra=alt["letra"], texto=alt["texto"])
+    return questao.id
+
+
 def criar_questao(dados: dict) -> int:
     init_db()
-    campos = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario")
     with db.atomic():
-        questao = Questao.create(**{campo: dados.get(campo) for campo in campos})
-        if questao.tipo == "multipla_escolha" and "alternativas" in dados:
-            for alt in dados["alternativas"]:
-                Alternativa.create(questao=questao.id, letra=alt["letra"], texto=alt["texto"])
-    return questao.id
+        return _criar_questao_sem_transacao(dados)
+
+
+def criar_questoes_em_lote(lista_dados: list[dict]) -> list[int]:
+    init_db()
+    ids = []
+    with db.atomic():
+        for dados in lista_dados:
+            ids.append(_criar_questao_sem_transacao(dados))
+    return ids
 
 
 def atualizar_questao(q_id: int, dados: dict):
     init_db()
-    campos = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario")
     with db.atomic():
         questao = Questao.get_by_id(q_id)
-        for campo in campos:
+        for campo in CAMPOS_QUESTAO:
             setattr(questao, campo, dados.get(campo))
         questao.save()
         if questao.tipo == "multipla_escolha" and "alternativas" in dados:
             Alternativa.delete().where(Alternativa.questao == q_id).execute()
             for alt in dados["alternativas"]:
                 Alternativa.create(questao=q_id, letra=alt["letra"], texto=alt["texto"])
+        elif questao.tipo != "multipla_escolha":
+            # Alternativas não fazem parte de questões certo/errado. Remova
+            # resíduos ao trocar o tipo para evitar que reapareçam depois.
+            Alternativa.delete().where(Alternativa.questao == q_id).execute()
 
 
 def excluir_questao(q_id: int):
@@ -94,6 +119,8 @@ def listar_bancas() -> list[str]:
 
 def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int) -> int:
     init_db()
+    if quantidade <= 0:
+        return 0
     query = Questao.select(Questao.id).where(Questao.ativa == True)
     if filtros and filtros.get("disciplina"):
         query = query.where(Questao.disciplina == filtros["disciplina"])
@@ -105,21 +132,47 @@ def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int
     if not todas_questoes:
         return 0
     selecionadas = random.sample(todas_questoes, min(quantidade, len(todas_questoes)))
+    configuracao = dict(filtros or {})
+    configuracao["_tempo_limite_min"] = max(0, int(tempo_limite_min or 0))
     with db.atomic():
-        prova = Prova.create(nome=nome, filtros=json.dumps(filtros))
+        prova = Prova.create(nome=nome, filtros=json.dumps(configuracao))
         for ordem, q_id in enumerate(selecionadas, 1):
             ProvaQuestao.create(prova=prova.id, questao=q_id, ordem=ordem)
     return prova.id
 
 
-def listar_provas() -> list[dict]:
+def listar_provas(incluir_concluidas: bool = False) -> list[dict]:
     init_db()
     qtd = fn.COUNT(ProvaQuestao.questao).alias("qtd_questoes")
-    query = (Prova.select(Prova.id, Prova.nome, Prova.criada_em, qtd)
+    query = (Prova.select(Prova.id, Prova.nome, Prova.filtros, Prova.criada_em, qtd)
              .join(ProvaQuestao, join_type=JOIN.LEFT_OUTER)
              .group_by(Prova.id)
              .order_by(Prova.criada_em.desc()))
-    return [{"id": p.id, "nome": p.nome, "criada_em": _legacy_value(p.criada_em), "qtd_questoes": p.qtd_questoes} for p in query]
+    provas = []
+    for prova in query:
+        concluida = (Tentativa.select()
+                     .where((Tentativa.prova == prova.id) & Tentativa.finalizada_em.is_null(False))
+                     .exists())
+        if concluida and not incluir_concluidas:
+            continue
+        try:
+            configuracao = json.loads(prova.filtros or "{}")
+        except (TypeError, json.JSONDecodeError):
+            configuracao = {}
+        provas.append({"id": prova.id, "nome": prova.nome, "criada_em": _legacy_value(prova.criada_em), "qtd_questoes": prova.qtd_questoes, "concluida": concluida, "tempo_limite_min": _tempo_limite_da_configuracao(configuracao)})
+    return provas
+
+
+def obter_prova(prova_id: int) -> dict | None:
+    init_db()
+    prova = Prova.get_or_none(Prova.id == prova_id)
+    if prova is None:
+        return None
+    try:
+        configuracao = json.loads(prova.filtros or "{}")
+    except (TypeError, json.JSONDecodeError):
+        configuracao = {}
+    return {"id": prova.id, "nome": prova.nome, "tempo_limite_min": _tempo_limite_da_configuracao(configuracao)}
 
 
 def iniciar_tentativa(prova_id: int) -> int:
@@ -132,6 +185,19 @@ def finalizar_tentativa(tentativa_id: int, respostas_usuario: dict, tempo_gasto_
     total_acertos = 0
     total_questoes = len(respostas_usuario)
     detalhes_erradas = []
+    tentativa = Tentativa.get_by_id(tentativa_id)
+    if tentativa.finalizada_em is not None:
+        raise ValueError("Esta tentativa já foi finalizada.")
+    # Questões não respondidas continuam fazendo parte da prova. O total da
+    # nota deve vir da composição da prova, e não da quantidade de respostas.
+    if tentativa.prova_id:
+        questoes_da_prova = {row.questao_id for row in ProvaQuestao.select(ProvaQuestao.questao).where(ProvaQuestao.prova == tentativa.prova_id)}
+        invalidas = set(respostas_usuario) - questoes_da_prova
+        if invalidas:
+            raise ValueError("A tentativa contém respostas para questões que não pertencem à prova.")
+        total_questoes = (ProvaQuestao.select()
+                           .where(ProvaQuestao.prova == tentativa.prova_id)
+                           .count()) or total_questoes
     with db.atomic():
         for q_id, resposta in respostas_usuario.items():
             questao = Questao.get_by_id(q_id)

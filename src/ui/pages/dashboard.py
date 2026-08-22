@@ -74,6 +74,10 @@ class DashboardPage(QWidget):
         self.layout.addStretch()
         self.carregar_dados()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.carregar_dados()
+
     def _criar_hero(self):
         hero = QFrame()
         hero.setObjectName("dashboard-hero")

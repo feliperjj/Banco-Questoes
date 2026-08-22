@@ -9,12 +9,50 @@ import pdfplumber
 logger = logging.getLogger(__name__)
 
 
+PADRAO_WATERMARK_PCI = re.compile(r"\bpcimarkpci\b", re.IGNORECASE)
+PADRAO_TOKEN_WATERMARK = re.compile(r"^[A-Za-z0-9+/=:]{40,}$")
+PADRAO_SECAO_CONTEUDO = re.compile(
+    r"(?i)(l(?:í|i|�)ngua|conhecimentos|direito|inform(?:á|a|�)tica|"
+    r"racioc(?:í|i|�)nio|matem(?:á|a|�)tica|contabilidade|auditoria|"
+    r"legisla|atualidades)"
+)
+PADRAO_SECAO_COM_CONTAGEM = re.compile(r"\|\s*\d+\s*quest(?:ão|ões|ao|oes|�o|�es)", re.IGNORECASE)
+PADRAO_MARCADOR_QUESTAO = re.compile(r"(?im)^\s*(?:quest(?:ão|ao|�o)\s*)?\d{1,3}(?:[.\-):]\s*|\s+)")
+PADRAO_ALTERNATIVA = re.compile(r"(?im)^\s*\(?[A-Ea-e]\)?[.\-):]\s+")
+
+# Constantes calibradas para o layout CEBRASPE atual de gabarito escaneado.
+OCR_CEBRASPE_RESOLUCAO = 180
+OCR_CEBRASPE_CABECALHO_Y_FALLBACK = 500
+OCR_CEBRASPE_ALTURA_GRADE = 430
+OCR_CEBRASPE_OFFSET_GRADE_Y = 35
+OCR_CEBRASPE_LIMIAR_PIXELS_ESCUROS = 180
+OCR_CEBRASPE_LIMIAR_LINHA_HORIZONTAL = 0.38
+OCR_CEBRASPE_LIMIAR_LINHA_VERTICAL = 0.70
+OCR_CEBRASPE_LINHAS_VERTICAIS_ESPERADAS = 21
+OCR_CEBRASPE_COLUNAS_RESPOSTAS = 20
+OCR_CEBRASPE_LINHAS_RESPOSTAS = 4
+OCR_CEBRASPE_ESPACO_LINHA_MIN = 25
+OCR_CEBRASPE_ESPACO_LINHA_MAX = 48
+OCR_CEBRASPE_CENTROS_Y_FALLBACK = (72, 157, 242, 326)
+OCR_CEBRASPE_RECORTES_CELULA = ((15, 18), (24, 25), (25, 30))
+OCR_CEBRASPE_ESCALA_RECORTE = 6
+OCR_CEBRASPE_CONFIANCA_MINIMA = 0.35
+
+
 def _normalizar_pagina(texto: str) -> str:
     texto = texto.replace("\xa0", " ").replace("\r\n", "\n").replace("\r", "\n")
     # Une palavras quebradas no fim da linha, sem destruir a separação de questões.
     texto = re.sub(r"(?<=\w)-\n(?=\w)", "", texto)
     texto = re.sub(r"[ \t]+", " ", texto)
-    return "\n".join(linha.strip() for linha in texto.splitlines() if linha.strip())
+    linhas = []
+    for linha in texto.splitlines():
+        linha = linha.strip()
+        if not linha or PADRAO_WATERMARK_PCI.search(linha):
+            continue
+        if PADRAO_TOKEN_WATERMARK.fullmatch(linha):
+            continue
+        linhas.append(linha)
+    return "\n".join(linhas)
 
 
 def _linhas_repetidas(paginas: list[str]) -> set[str]:
@@ -34,26 +72,141 @@ def _linhas_repetidas(paginas: list[str]) -> set[str]:
     }
 
 
+def _pagina_sem_texto_rotacionado(pagina):
+    return pagina.filter(lambda obj: obj.get("object_type") != "char" or obj.get("upright", True))
+
+
+def _extrair_texto_area(pagina, bbox) -> str:
+    area = pagina.crop(bbox)
+    return area.extract_text(x_tolerance=2, y_tolerance=3) or ""
+
+
+def _extrair_texto_colunas(pagina, topo=0) -> str:
+    metade = pagina.width / 2
+    partes = [
+        _extrair_texto_area(pagina, (0, topo, metade, pagina.height)),
+        _extrair_texto_area(pagina, (metade, topo, pagina.width, pagina.height)),
+    ]
+    return "\n".join(parte for parte in partes if parte)
+
+
+def _agrupar_palavras_por_linha(palavras):
+    linhas = []
+    for palavra in sorted(palavras, key=lambda item: (item["top"], item["x0"])):
+        if not linhas or abs(palavra["top"] - linhas[-1][0]) > 4:
+            linhas.append([palavra["top"], []])
+        linhas[-1][1].append(palavra)
+    return linhas
+
+
+def _topo_primeira_secao(palavras):
+    for topo, linha_palavras in _agrupar_palavras_por_linha(palavras):
+        texto = " ".join(palavra["text"] for palavra in sorted(linha_palavras, key=lambda item: item["x0"]))
+        quantidade_linguas = len(re.findall(r"l(?:í|i|�)ngua", texto, re.IGNORECASE))
+        if PADRAO_SECAO_COM_CONTAGEM.search(texto) or quantidade_linguas >= 2:
+            return max(0, topo - 2)
+    return None
+
+
+def _parece_pagina_de_questoes(texto: str) -> bool:
+    if re.search(r"(?i)\bquest(?:ão|ao|�o)\s*\d{1,3}", texto):
+        return True
+    return len(PADRAO_MARCADOR_QUESTAO.findall(texto)) >= 2 and len(PADRAO_ALTERNATIVA.findall(texto)) >= 2
+
+
+def _tem_duas_colunas(palavras, largura_pagina, topo=0) -> bool:
+    """Retorna se há duas colunas reais abaixo de ``topo``.
+
+    Contar palavras por metade da página não é suficiente: uma linha de
+    instruções em largura total naturalmente põe palavras nos dois lados e
+    pode ser confundida com uma página em colunas. Consideramos somente
+    linhas cujo conteúdo inteiro fica dentro de uma metade; isso também
+    permite que instruções em uma coluna e questões em duas colunas convivam
+    na mesma página.
+    """
+    palavras = [palavra for palavra in palavras if palavra["top"] >= topo]
+    if len(palavras) < 60:
+        return False
+    metade = largura_pagina / 2
+    palavras_brutas_esquerda = sum(1 for palavra in palavras if palavra["x0"] < metade)
+    palavras_brutas_direita = len(palavras) - palavras_brutas_esquerda
+    proporcao_bruta = min(palavras_brutas_esquerda, palavras_brutas_direita) / len(palavras)
+    linhas = _agrupar_palavras_por_linha(palavras)
+    linhas_esquerda = 0
+    linhas_direita = 0
+    palavras_esquerda = 0
+    palavras_direita = 0
+    lacunas_centrais = []
+    for _, linha in linhas:
+        palavras_lado_esquerdo = [palavra for palavra in linha if palavra["x0"] < metade]
+        palavras_lado_direito = [palavra for palavra in linha if palavra["x0"] >= metade]
+        if palavras_lado_esquerdo and palavras_lado_direito:
+            fim_esquerda = max(palavra.get("x1", palavra["x0"]) for palavra in palavras_lado_esquerdo)
+            inicio_direita = min(palavra["x0"] for palavra in palavras_lado_direito)
+            lacunas_centrais.append(inicio_direita - fim_esquerda)
+        minimo = min(palavra["x0"] for palavra in linha)
+        maximo = max(palavra.get("x1", palavra["x0"]) for palavra in linha)
+        if maximo <= metade:
+            linhas_esquerda += 1
+            palavras_esquerda += len(linha)
+        elif minimo >= metade:
+            linhas_direita += 1
+            palavras_direita += len(linha)
+        elif palavras_lado_esquerdo and palavras_lado_direito:
+            # Colunas sobrepostas verticalmente são uma linha de cada coluna;
+            # contabiliza-as dos dois lados somente quando há um vão central
+            # claro entre elas. Linhas corridas não passam neste teste.
+            if lacunas_centrais[-1] >= largura_pagina * 0.08:
+                linhas_esquerda += 1
+                linhas_direita += 1
+                palavras_esquerda += len(palavras_lado_esquerdo)
+                palavras_direita += len(palavras_lado_direito)
+
+    total = palavras_esquerda + palavras_direita
+    if not total or linhas_esquerda < 3 or linhas_direita < 3:
+        return False
+    detectou_por_linhas = (
+        (not lacunas_centrais or sorted(lacunas_centrais)[len(lacunas_centrais) // 2] >= largura_pagina * 0.08)
+        and
+        palavras_esquerda > 20
+        and palavras_direita > 20
+        and min(palavras_esquerda, palavras_direita) / total >= 0.30
+    )
+    if detectou_por_linhas:
+        return True
+
+    # Alguns cadernos FGV/Cesgranrio usam colunas assimétricas ou quebram a
+    # mesma linha das duas colunas no mesmo y. Nesses casos a análise por
+    # linhas é conservadora demais, mas a distribuição bruta ainda é um
+    # sinal confiável. O limite de 20% preserva páginas essencialmente de uma
+    # coluna, como a última página curta do caderno TRANSPETRO.
+    return proporcao_bruta >= 0.20 and palavras_brutas_esquerda > 30 and palavras_brutas_direita > 30
+
+
 def extrair_texto_pdf(caminho: str) -> str:
     paginas = []
+    modo_colunas = False
     with pdfplumber.open(caminho) as pdf:
         for numero, pagina in enumerate(pdf.pages, start=1):
-            palavras = pagina.extract_words(x_tolerance=2, y_tolerance=3)
-            metade = pagina.width / 2
-            esquerda = [palavra for palavra in palavras if palavra["x0"] < metade]
-            direita = [palavra for palavra in palavras if palavra["x0"] >= metade]
-            # Provas CESPE costumam ter duas colunas. A ordem visual correta é
-            # coluna esquerda inteira e, depois, coluna direita inteira.
-            if len(esquerda) > 30 and len(direita) > 30:
-                caixa_esquerda = pagina.crop((0, 0, metade, pagina.height))
-                caixa_direita = pagina.crop((metade, 0, pagina.width, pagina.height))
-                partes = [
-                    caixa_esquerda.extract_text(x_tolerance=2, y_tolerance=3) or "",
-                    caixa_direita.extract_text(x_tolerance=2, y_tolerance=3) or "",
-                ]
-                texto = "\n".join(parte for parte in partes if parte)
+            pagina_filtrada = _pagina_sem_texto_rotacionado(pagina)
+            palavras = pagina_filtrada.extract_words(x_tolerance=2, y_tolerance=3, extra_attrs=["upright"])
+            texto_normal = pagina_filtrada.extract_text(x_tolerance=2, y_tolerance=3) or ""
+            topo_secao = _topo_primeira_secao(palavras)
+            modo_colunas_anterior = modo_colunas
+            if topo_secao is not None:
+                modo_colunas = True
+                if modo_colunas_anterior and _tem_duas_colunas(palavras, pagina.width):
+                    texto = _extrair_texto_colunas(pagina_filtrada)
+                elif _tem_duas_colunas(palavras, pagina.width, topo_secao):
+                    texto_topo = _extrair_texto_area(pagina_filtrada, (0, 0, pagina.width, topo_secao))
+                    texto_corpo = _extrair_texto_colunas(pagina_filtrada, topo_secao)
+                    texto = "\n".join(parte for parte in (texto_topo, texto_corpo) if parte)
+                else:
+                    texto = texto_normal
+            elif (modo_colunas or _parece_pagina_de_questoes(texto_normal)) and _tem_duas_colunas(palavras, pagina.width):
+                texto = _extrair_texto_colunas(pagina_filtrada)
             else:
-                texto = pagina.extract_text(x_tolerance=2, y_tolerance=3)
+                texto = texto_normal
             if texto:
                 paginas.append(_normalizar_pagina(texto))
             else:
@@ -93,6 +246,37 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
             if codigo_prova and not pagina_especifica and not pagina_comum_superior:
                 continue
             linhas = [re.sub(r"\s+", " ", linha).strip() for linha in texto.splitlines()]
+            pagina_multiprovas = bool(re.search(r"PROVA\s+1", texto, re.IGNORECASE) and re.search(r"PROVA\s+2", texto, re.IGNORECASE))
+            pares_na_mesma_linha = [
+                re.findall(r"\b(\d{1,3})\s*[-–:]\s*([A-E])\b", linha.upper())
+                for linha in linhas
+            ]
+            if pagina_multiprovas:
+                # O gabarito do nível superior imprime quatro provas lado a
+                # lado. Cada linha traz dois pares por prova (21/46, 22/47,
+                # ...). Para este caderno, PROVA 1 é Administração e é a
+                # coluna usada quando nenhum código específico foi informado.
+                coluna = 0
+                if codigo_prova:
+                    encontrado = re.search(r"(?:PROVA\s*)?(\d+)", codigo_prova, re.IGNORECASE)
+                    if encontrado:
+                        coluna = max(0, min(int(encontrado.group(1)) - 1, 3))
+                for pares in pares_na_mesma_linha:
+                    inicio = coluna * 2
+                    for numero, resposta in pares[inicio:inicio + 2]:
+                        gabaritos[int(numero)] = resposta
+                continue
+
+            # Alguns gabaritos simples colocam todos os pares na mesma linha,
+            # por exemplo: "1 - E 2 - B 3 - B ...".
+            encontrou_pares = False
+            for pares in pares_na_mesma_linha:
+                for numero, resposta in pares:
+                    gabaritos[int(numero)] = resposta
+                    encontrou_pares = True
+            if encontrou_pares:
+                continue
+
             for indice, linha in enumerate(linhas):
                 if not re.match(r"^Item\s+", linha, re.IGNORECASE):
                     continue
@@ -128,6 +312,79 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
     return gabaritos
 
 
+def _agrupar_indices_consecutivos(indices):
+    grupos = []
+    for indice in indices:
+        if not grupos or indice > grupos[-1][-1] + 1:
+            grupos.append([])
+        grupos[-1].append(indice)
+    return grupos
+
+
+def _detectar_cabecalho_y(deteccoes):
+    for caixa, texto, _ in deteccoes:
+        if re.search(r"prova\s*1", str(texto), re.IGNORECASE):
+            return sum(ponto[1] for ponto in caixa) / 4
+    return OCR_CEBRASPE_CABECALHO_Y_FALLBACK
+
+
+def _detectar_grade(imagem, cabecalho_y=None):
+    import cv2
+
+    cabecalho_y = OCR_CEBRASPE_CABECALHO_Y_FALLBACK if cabecalho_y is None else cabecalho_y
+    limite_inferior = cabecalho_y + OCR_CEBRASPE_ALTURA_GRADE
+    gray = cv2.cvtColor(imagem, cv2.COLOR_RGB2GRAY)
+    regiao = gray[int(cabecalho_y + OCR_CEBRASPE_OFFSET_GRADE_Y):int(limite_inferior), :]
+    projecao_horizontal = (regiao < OCR_CEBRASPE_LIMIAR_PIXELS_ESCUROS).sum(axis=1)
+    linhas = [
+        i + int(cabecalho_y + OCR_CEBRASPE_OFFSET_GRADE_Y)
+        for i, valor in enumerate(projecao_horizontal)
+        if valor > imagem.shape[1] * OCR_CEBRASPE_LIMIAR_LINHA_HORIZONTAL
+    ]
+    grupos = _agrupar_indices_consecutivos(linhas)
+    linhas_grade = [sum(grupo) / len(grupo) for grupo in grupos if len(grupo) >= 1]
+    centros_y = []
+    for primeira, segunda in zip(linhas_grade, linhas_grade[1:]):
+        if OCR_CEBRASPE_ESPACO_LINHA_MIN <= segunda - primeira <= OCR_CEBRASPE_ESPACO_LINHA_MAX:
+            centros_y.append((primeira + segunda) / 2)
+    centros_y = centros_y[:OCR_CEBRASPE_LINHAS_RESPOSTAS]
+    if len(centros_y) < OCR_CEBRASPE_LINHAS_RESPOSTAS:
+        centros_y = [cabecalho_y + valor for valor in OCR_CEBRASPE_CENTROS_Y_FALLBACK]
+
+    # A grade tem 21 linhas verticais; detectá-las torna o OCR independente
+    # da resolução exata do PDF.
+    regiao_vertical = gray[int(cabecalho_y + OCR_CEBRASPE_OFFSET_GRADE_Y):int(limite_inferior), :]
+    projecao_vertical = (regiao_vertical < OCR_CEBRASPE_LIMIAR_PIXELS_ESCUROS).sum(axis=0)
+    linhas_x = [
+        i for i, valor in enumerate(projecao_vertical)
+        if valor > (limite_inferior - cabecalho_y) * OCR_CEBRASPE_LIMIAR_LINHA_VERTICAL
+    ]
+    grupos_x = _agrupar_indices_consecutivos(linhas_x)
+    linhas_grade_x = [sum(grupo) / len(grupo) for grupo in grupos_x]
+    if len(linhas_grade_x) < OCR_CEBRASPE_LINHAS_VERTICAIS_ESPERADAS:
+        return centros_y, []
+    linhas_grade_x = linhas_grade_x[:OCR_CEBRASPE_LINHAS_VERTICAIS_ESPERADAS]
+    centros_x = [(linhas_grade_x[i] + linhas_grade_x[i + 1]) / 2 for i in range(OCR_CEBRASPE_COLUNAS_RESPOSTAS)]
+    return centros_y, centros_x
+
+
+def _ler_celula(imagem, centro_y, centro_x, ocr):
+    import cv2
+
+    candidatos = []
+    for largura, altura in OCR_CEBRASPE_RECORTES_CELULA:
+        recorte = imagem[int(centro_y - altura):int(centro_y + altura), int(centro_x - largura):int(centro_x + largura)]
+        recorte = cv2.resize(recorte, None, fx=OCR_CEBRASPE_ESCALA_RECORTE, fy=OCR_CEBRASPE_ESCALA_RECORTE, interpolation=cv2.INTER_CUBIC)
+        deteccoes_celula, _ = ocr(recorte)
+        candidatos.extend((texto, celula[2]) for celula in (deteccoes_celula or []) if (texto := str(celula[1]).strip().upper()) in "ABCDE")
+    if not candidatos:
+        return None
+    letra, confianca = max(candidatos, key=lambda item: item[1])
+    if confianca >= OCR_CEBRASPE_CONFIANCA_MINIMA:
+        return letra
+    return None
+
+
 def _extrair_gabaritos_ocr(caminho: str) -> dict[int, str]:
     """Lê tabelas de gabarito escaneadas usando OCR somente no ambiente Python."""
     try:
@@ -141,7 +398,7 @@ def _extrair_gabaritos_ocr(caminho: str) -> dict[int, str]:
     try:
         with pdfplumber.open(caminho) as pdf:
             pagina = pdf.pages[0]
-            imagem = np.array(pagina.to_image(resolution=180).original.convert("RGB"))
+            imagem = np.array(pagina.to_image(resolution=OCR_CEBRASPE_RESOLUCAO).original.convert("RGB"))
         ocr = RapidOCR()
         deteccoes, _ = ocr(imagem)
         if not deteccoes:
@@ -149,62 +406,17 @@ def _extrair_gabaritos_ocr(caminho: str) -> dict[int, str]:
 
         # Localiza o cabeçalho da primeira prova e usa a geometria da grade,
         # em vez de depender do texto ou da banca do documento.
-        cabecalho_y = None
-        for caixa, texto, _ in deteccoes:
-            if re.search(r"prova\s*1", str(texto), re.IGNORECASE):
-                cabecalho_y = sum(ponto[1] for ponto in caixa) / 4
-                break
-        if cabecalho_y is None:
-            cabecalho_y = 500
-
-        limite_inferior = cabecalho_y + 430
-        gray = cv2.cvtColor(imagem, cv2.COLOR_RGB2GRAY)
-        regiao = gray[int(cabecalho_y + 35):int(limite_inferior), :]
-        projecao_horizontal = (regiao < 180).sum(axis=1)
-        linhas = [i + int(cabecalho_y + 35) for i, valor in enumerate(projecao_horizontal) if valor > imagem.shape[1] * 0.38]
-        grupos = []
-        for linha in linhas:
-            if not grupos or linha > grupos[-1][-1] + 1:
-                grupos.append([])
-            grupos[-1].append(linha)
-        linhas_grade = [sum(grupo) / len(grupo) for grupo in grupos if len(grupo) >= 1]
-        centros_y = []
-        for primeira, segunda in zip(linhas_grade, linhas_grade[1:]):
-            if 25 <= segunda - primeira <= 48:
-                centros_y.append((primeira + segunda) / 2)
-        centros_y = centros_y[:4]
-        if len(centros_y) < 4:
-            centros_y = [cabecalho_y + valor for valor in (72, 157, 242, 326)]
-
-        # A grade tem 21 linhas verticais; detectá-las torna o OCR independente
-        # da resolução exata do PDF.
-        regiao_vertical = gray[int(cabecalho_y + 35):int(limite_inferior), :]
-        projecao_vertical = (regiao_vertical < 180).sum(axis=0)
-        linhas_x = [i for i, valor in enumerate(projecao_vertical) if valor > (limite_inferior - cabecalho_y) * 0.70]
-        grupos_x = []
-        for linha in linhas_x:
-            if not grupos_x or linha > grupos_x[-1][-1] + 1:
-                grupos_x.append([])
-            grupos_x[-1].append(linha)
-        linhas_grade_x = [sum(grupo) / len(grupo) for grupo in grupos_x]
-        if len(linhas_grade_x) < 21:
+        cabecalho_y = _detectar_cabecalho_y(deteccoes)
+        centros_y, centros_x = _detectar_grade(imagem, cabecalho_y)
+        if not centros_x:
             return {}
-        linhas_grade_x = linhas_grade_x[:21]
-        centros_x = [(linhas_grade_x[i] + linhas_grade_x[i + 1]) / 2 for i in range(20)]
 
         resultado = {}
         for linha, centro_y in enumerate(centros_y):
             for coluna, centro_x in enumerate(centros_x):
-                candidatos = []
-                for largura, altura in ((15, 18), (24, 25), (25, 30)):
-                    recorte = imagem[int(centro_y - altura):int(centro_y + altura), int(centro_x - largura):int(centro_x + largura)]
-                    recorte = cv2.resize(recorte, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
-                    deteccoes_celula, _ = ocr(recorte)
-                    candidatos.extend((str(celula[1]).strip().upper(), celula[2]) for celula in (deteccoes_celula or []) if str(celula[1]).strip().upper() in "ABCDE")
-                if candidatos:
-                    letra, confianca = max(candidatos, key=lambda item: item[1])
-                    if confianca >= 0.35:
-                        resultado[linha * 20 + coluna + 1] = letra
+                letra = _ler_celula(imagem, centro_y, centro_x, ocr)
+                if letra is not None:
+                    resultado[linha * OCR_CEBRASPE_COLUNAS_RESPOSTAS + coluna + 1] = letra
         logger.info("OCR de gabarito: %s itens reconhecidos", len(resultado))
         return resultado
     except Exception:
