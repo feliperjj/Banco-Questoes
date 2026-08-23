@@ -40,8 +40,10 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 - `listar_provas()` sem argumentos significa provas iniciáveis/pendentes.
 - `listar_provas(incluir_concluidas=True)` inclui o histórico e cada item deve informar `concluida`.
 - Uma prova com tentativa finalizada não pode voltar a ter ação “Iniciar”.
+- Novas provas só podem conter questões ativas com gabarito avaliável; questões sem gabarito ou anuladas permanecem no banco, mas não entram na seleção.
+- Iniciar novamente uma tentativa aberta reutiliza o mesmo registro; uma prova finalizada é rejeitada também pelo repositório.
 - O limite de tempo escolhido na geração deve ser persistido na configuração da prova e aplicado pelo timer da execução; zero significa sem limite.
-- A nota usa a quantidade total de questões da composição da prova; questões sem resposta contam como não acertadas.
+- A nota usa a quantidade de questões avaliáveis da composição da prova; questões sem resposta contam como não acertadas e questões anuladas ficam fora do denominador, sem erro ou revisão espaçada.
 - Uma tentativa finalizada não pode ser finalizada novamente, e respostas devem pertencer à composição daquela prova.
 - `ativa=False` é exclusão lógica; não remover silenciosamente registros que possuem respostas, provas ou revisões.
 
@@ -54,6 +56,8 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 - A ordem numérica oficial deve ser preservada mesmo quando o PDF estiver em duas colunas.
 - O parser não deve presumir uma banca para interpretar o documento; heurísticas específicas precisam ser opt-in ou claramente isoladas.
 - `parsear_gabarito_em_lote` só aceita tokens inteiros (`A`–`E`, `CERTO`, `ERRADO`), nunca letras no meio de palavras.
+- O vínculo usa `questao["numero"]`; índice visual só é fallback quando o documento não fornece número oficial.
+- Texto e tabelas têm precedência sobre OCR. OCR só complementa números esperados ausentes e nunca adiciona números fora do caderno.
 - PDF escaneado pode não produzir texto; nesse caso a UI deve oferecer OCR ou colagem manual, sem apagar a prévia existente.
 
 ### UI e estado

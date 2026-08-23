@@ -7,7 +7,7 @@ O projeto importa provas em PDF/DOCX, interpreta questões e gabaritos, permite 
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Interface](https://img.shields.io/badge/Interface-PySide6-41CD52?logo=qt&logoColor=white)
 ![Banco](https://img.shields.io/badge/Banco-SQLite-003B57?logo=sqlite&logoColor=white)
-![Testes](https://img.shields.io/badge/Testes-29%20aprovados-2ea44f)
+![Testes](https://img.shields.io/badge/Testes-48%20aprovados-2ea44f)
 
 ## O problema que o projeto resolve
 
@@ -27,6 +27,7 @@ O objetivo não é fingir que todo PDF possui o mesmo formato. O objetivo é aut
 - Extração de gabaritos textuais, tabelados e, quando disponível, OCR.
 - OCR CPU com RapidOCR, detecção de grades/células por OpenCV e templates específicos para layouts dos samples.
 - Validação de vínculo por número, cargo/prova e quantidade, com pendências separadas para revisão manual.
+- Catálogo versionado de associações e diagnóstico não destrutivo de cobertura por arquivo.
 - Aplicação de gabarito e classificação por intervalos.
 - Edição e exclusão lógica de questões.
 - Busca por enunciado, disciplina, categoria, banca e tipo.
@@ -158,11 +159,20 @@ python main.py
 
 O OCR utiliza dependências Python do projeto. PDFs escaneados podem exigir mais tempo de processamento e revisão manual.
 
-Na reimportação dos samples de 23/08/2026, a confiança alta passou de 919/979 (93,87%) para 954/979 (97,45%), um ganho de 3,58 pontos percentuais. O vínculo de gabaritos permaneceu em 551/979 (56,28%); os casos sem correspondência inequívoca continuam separados para revisão.
+O relatório histórico dos samples registrava 551/979 (56,28%) vínculos. Após
+catalogar correspondências explícitas adicionais e fortalecer texto/tabelas, o
+diagnóstico não destrutivo com os 23 PDFs reais encontrou 820/979 (83,76%):
+ganho de 269 questões e 27,48 pontos percentuais. Uma reimportação completa
+posterior reproduziu os mesmos 820 vínculos no banco local, confirmando que a
+cobertura não estava limitada ao relatório diagnóstico.
 
 ### Meta prioritária
 
-A métrica mais importante para as próximas iterações é a cobertura de gabaritos confirmados. A meta é elevar os atuais 551/979 (56,28%) para pelo menos 80%, chegando a aproximadamente 783 questões com resposta validada. Confiança de extração, quantidade de questões e classificação são métricas auxiliares: uma questão sem gabarito confirmado ainda não está pronta para estudo com correção automática.
+A meta inicial de pelo menos 80% foi atingida com 820/979 (83,76%). O próximo
+trabalho deve reduzir duplicidades de numeração e catalogar os cadernos ainda
+sem correspondência. “Associação confirmada” significa que caderno, cargo e
+tipo foram identificados explicitamente; alguns arquivos-fonte são gabaritos
+preliminares e continuam sujeitos ao resultado definitivo após recursos.
 
 ## Dados locais
 
@@ -177,6 +187,18 @@ Executar a suíte:
 ```powershell
 .venv\Scripts\python.exe -m pytest -q
 ```
+
+Gerar o diagnóstico dos samples sem abrir ou alterar o banco:
+
+```powershell
+.venv\Scripts\python.exe scripts\diagnosticar_samples.py
+# Rodada opcional mais lenta para completar apenas números faltantes:
+.venv\Scripts\python.exe scripts\diagnosticar_samples.py --ocr
+```
+
+Os relatórios são gravados em `reports/diagnostico_samples.json` e
+`reports/diagnostico_samples.md`. O percentual só é conclusivo quando os PDFs
+correspondentes estão presentes em `samples/`.
 
 Verificar compilação:
 

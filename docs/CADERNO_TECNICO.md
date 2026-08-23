@@ -130,6 +130,15 @@ extrator → parser → operações em lote → criar_questoes_em_lote
 
 ## 4. Pipeline de importação
 
+### 4.0 Integridade da prova
+
+Uma prova avaliativa só é composta por questões ativas com gabarito válido. O
+vocabulário é centralizado em `src/importador/validacao.py`. A resposta
+`Anulada` é preservada para auditoria, mas não reduz a nota, não gera erro e
+não entra na revisão espaçada. O catálogo versionado em
+`config/gabaritos.json` exige evidência explícita e não usa aproximação de
+cargo ou prova.
+
 ### 4.1 Extração
 
 `extrair_texto()` escolhe o adaptador pela extensão:
@@ -192,7 +201,14 @@ O gabarito pode chegar como:
 - grade escaneada, tratada pelo caminho OCR quando texto não existe;
 - sequência colada manualmente na tela.
 
-Para os samples escaneados, o caminho OCR usa RapidOCR em CPU. O OpenCV detecta a geometria da grade e recorta as células antes de classificar cada resposta. As geometrias ficam em templates nomeados (`src/importador/templates.py`), mantendo separado o layout CEBRASPE em grade 4x20 do layout textual de pares.
+Para os samples escaneados, o caminho OCR usa RapidOCR em CPU. O OpenCV detecta a geometria da grade e recorta as células antes de classificar cada resposta. As geometrias ficam em templates nomeados (`src/importador/templates.py`). Texto e tabelas estruturadas são processados primeiro; quando o conjunto esperado de números é conhecido, o OCR complementa somente os itens faltantes e respostas já confirmadas não são sobrescritas.
+
+As associações confirmadas ficam em `config/gabaritos.json`, indexadas pelo
+caminho relativo do caderno para evitar colisões de nomes. O comando
+`scripts/diagnosticar_samples.py` gera JSON e Markdown sem abrir o banco, com
+taxa de extração, associação, cobertura final, ganho potencial e motivos de
+revisão. A opção `--ocr` executa a rodada mais lenta apenas para completar
+itens ausentes.
 
 O vínculo nunca é feito por deslocamento posicional quando há números disponíveis. `src/importador/validacao.py` compara números do caderno e do gabarito, registra extras, faltantes e duplicidades e marca o arquivo para revisão manual quando o cargo/prova ou a quantidade não são confirmados.
 
@@ -204,17 +220,44 @@ O vínculo nunca é feito por deslocamento posicional quando há números dispon
 
 O script `scripts/reimportar_samples.py` é uma operação explicitamente manual. Ele extrai todos os arquivos antes de limpar o banco, para evitar substituir os dados por uma importação que falhou no meio.
 
-Na execução de 23/08/2026 foram processados 23 PDFs e 979 questões. A confiança alta foi 954 (97,45%), contra 919 (93,87%) na execução anterior: ganho de 3,58 pontos percentuais. Foram vinculados 551 gabaritos (56,28%). A validação estrutural aprovou integralmente 2 arquivos; os outros 21 foram preservados e marcados para revisão manual por divergência de quantidade, número, cargo ou gabarito.
+Na primeira execução de 23/08/2026 foram processados 23 PDFs e 979 questões. A confiança alta foi 954 (97,45%), contra 919 (93,87%) na execução anterior: ganho de 3,58 pontos percentuais. Naquele momento foram vinculados 551 gabaritos (56,28%). Após a estabilização do catálogo, uma nova reimportação persistiu 820 gabaritos (83,76%). A validação estrutural aprovou integralmente 2 arquivos; os outros 21 foram preservados e marcados para revisão manual por divergência de quantidade, número, cargo ou gabarito.
 
 ### Meta de cobertura de gabaritos
 
-O foco das próximas iterações é elevar a cobertura de gabaritos confirmados de 56,28% para 80% ou mais. Sobre a base atual de 979 questões, isso representa aproximadamente 783 respostas validadas — cerca de 232 vínculos adicionais. A prioridade técnica será ampliar associações por cargo/prova, templates de layouts, OCR de gabaritos escaneados e revisão dos casos ambíguos. A confiança da extração continua relevante, mas não substitui a existência de um gabarito confirmado.
+A meta original era elevar a cobertura de 56,28% para 80% ou mais — pelo
+menos 783 das 979 questões. A medição posterior abaixo registra que essa meta
+foi alcançada. A confiança da extração continua relevante, mas não substitui a
+existência de uma correspondência de gabarito rastreável.
+
+### Diagnóstico posterior à estabilização
+
+O diagnóstico não destrutivo executado em 23/08/2026 sobre os mesmos 23
+cadernos encontrou 820 vínculos estruturais em 979 questões (83,76%). Isso
+representa 269 vínculos adicionais e ganho de 27,48 pontos percentuais sobre a
+medição histórica. A meta de 80% foi superada sem executar OCR e sem abrir ou
+alterar o banco. O relatório detalhado está em
+`docs/RELATORIO_DIAGNOSTICO_GABARITOS.md`.
+
+Uma reimportação destrutiva autorizada foi executada em seguida, com backup
+prévio em `data/questoes.pre-reimport-2026-08-23.db`. A auditoria direta da
+tabela `questoes` confirmou 820 registros com gabarito e 159 sem gabarito,
+reproduzindo os **83,76%** previstos pelo diagnóstico.
+
+Nesse contexto, “vínculo confirmado” descreve a correspondência explícita
+entre caderno, concurso, cargo/prova e arquivo de gabarito. Não significa que
+todo arquivo seja definitivo: fontes preliminares permanecem identificadas
+como tais e podem exigir atualização após recursos.
 
 ## 5. Banco de dados
 
 ### 5.1 Fonte de verdade
 
 O schema executado é definido pelos modelos Peewee em `src/db/models.py`. `init_db()` cria as tabelas com `safe=True` e ativa chaves estrangeiras no SQLite.
+
+`src/db/migrations.py` mantém a versão do schema e repara incrementalmente
+colunas legadas conhecidas. Antes de uma alteração estrutural em um arquivo
+existente, cria uma cópia datada ao lado do banco. Testes usam bancos
+temporários e não migram o arquivo do usuário.
 
 O banco padrão é:
 
