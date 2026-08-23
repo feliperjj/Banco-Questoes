@@ -25,12 +25,85 @@ from src.db.models import (
     Tentativa,
 )
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
-from src.importador.parser import parsear_questoes
+from src.importador.parser import parsear_questoes, quantidade_declarada
+from src.importador.validacao import validar_gabarito
 
 
 SAMPLES = ROOT / "samples"
 DATABASE = ROOT / "data" / "questoes.db"
 GABARITO_TRANSPETRO = SAMPLES / "TRANSPETRO GABARITO.pdf"
+
+# Só entram associações confirmadas pelo cabeçalho do PDF. Um gabarito com
+# vários cargos não deve ser aplicado por aproximação de nome.
+GABARITOS_CONFIRMADOS = {
+    "administrador-fgv.pdf": ("GABARITO-FGV.pdf", "ADMINISTRADOR", "PROVA TIPO 1"),
+    "analista_administrativo_iii_analista_de_sistemas.pdf": (
+        "lote_2026_08_22/gabarito-2.pdf", "ANALISTA LEGISLATIVO III - ANALISTA DE SISTEMAS", "PROVA TIPO 1"
+    ),
+    "analista_analista_de_sistemas.pdf": (
+        "lote_2026_08_22/gabaritos_definitivos.pdf", "IBFC_04_ANALISTA - ANALISTA DE SISTEMAS", None
+    ),
+    "agente_administrativo_i.pdf": (
+        "lote_2026_08_22/gabarito_oficial-1.pdf", "AGENTE ADMINISTRATIVO I", None
+    ),
+    "agente_administrativo_i-4.pdf": (
+        "lote_2026_08_22/gabarito-6.pdf", "AGENTE ADMINISTRATIVO I", None
+    ),
+    "agente_de_tecnologia_da_informacao_e_comunicacao_analista_de_sistemas.pdf": (
+        "gabarito_definitivox.pdf", "S201 Analista de Sistemas", None
+    ),
+    "analista_producao_redes_suporte_de_banco_de_dados_e_suporte_de_sistemas.pdf": (
+        "lote_2026_08_22/gabarito-1.pdf",
+        "IBFC_04",
+        None,
+    ),
+    "auditor_fiscal.pdf": (
+        "lote_2026_08_22/gabarito-7.pdf", "Auditor Fiscal", None
+    ),
+    "analista_de_planejamento_e_orcamento_especialidade_governanca_e_gestao_de_projetos_de_ti-cebraspe.pdf": (
+        "gabarito_definitivo.pdf-CEBRASPE.pdf", "CARGO 1", None
+    ),
+}
+
+# Evidências explícitas encontradas na capa/organização do próprio sample.
+# Não usar o domínio de download (por exemplo, PCI Concursos) como banca.
+BANCAS_CONFIRMADAS = {
+    "agente_especializado_analista_de_sistemas.pdf": "FGV",
+    "analista_area_de_apoio_especializado_tecnologia_da_informacao_desenvolvimento_de_sistemas.pdf": "FGV",
+    "lote_2026_08_22/agente_administrativo_i-4.pdf": "Avança SP",
+    "lote_2026_08_22/auditor_fiscal.pdf": "FUNDATEC",
+}
+
+
+def _gabarito_do_sample(caminho: Path) -> dict[int, str]:
+    if caminho.name.lower() == "transpetro.pdf":
+        return extrair_gabaritos_pdf(str(GABARITO_TRANSPETRO))
+    chave = caminho.name.lower()
+    configuracao = GABARITOS_CONFIRMADOS.get(chave)
+    if not configuracao:
+        return {}
+    arquivo, cargo, codigo = configuracao
+    return extrair_gabaritos_pdf(str(SAMPLES / arquivo), codigo, cargo)
+
+
+def _aplicar_gabarito_validado(questoes: list[dict], gabaritos: dict[int, str]) -> int:
+    """Aplica somente respostas com número explícito correspondente.
+
+    A quantidade pode divergir: uma questão ausente no PDF não deve fazer o
+    gabarito das seguintes andar uma posição. Questões sem par permanecem sem
+    resposta e são catalogadas para revisão.
+    """
+    associados = 0
+    usados = set()
+    for indice, questao in enumerate(questoes, 1):
+        numero = questao.get("numero", indice)
+        if numero not in gabaritos or numero in usados:
+            continue
+        resposta = gabaritos[numero]
+        questao["gabarito"] = "Anulada" if resposta == "X" else resposta
+        usados.add(numero)
+        associados += 1
+    return associados
 
 
 def _is_question_pdf(path: Path) -> bool:
@@ -66,11 +139,21 @@ def main() -> None:
     # Primeiro extrai tudo; uma falha aqui não destrói o banco atual.
     for caminho in pdfs:
         texto = extrair_texto(str(caminho))
-        questoes = parsear_questoes(texto)
-        if caminho.name.lower() == "transpetro.pdf":
-            gabaritos = extrair_gabaritos_pdf(str(GABARITO_TRANSPETRO))
-            for numero, questao in enumerate(questoes, 1):
-                questao["gabarito"] = gabaritos.get(numero)
+        questoes = parsear_questoes(texto, str(caminho))
+        banca_confirmada = BANCAS_CONFIRMADAS.get(str(caminho.relative_to(SAMPLES)).replace("\\", "/"))
+        if banca_confirmada:
+            for questao in questoes:
+                questao["banca"] = banca_confirmada
+        gabaritos = _gabarito_do_sample(caminho)
+        quantidade_esperada = quantidade_declarada(texto)
+        cargo_confirmado = caminho.name.lower() in GABARITOS_CONFIRMADOS or caminho.name.lower() == "transpetro.pdf"
+        validacao = validar_gabarito(
+            questoes,
+            gabaritos,
+            cargo_encontrado=cargo_confirmado or not gabaritos,
+            quantidade_esperada=quantidade_esperada,
+        )
+        gabaritos_aplicados = _aplicar_gabarito_validado(questoes, gabaritos)
         dados = [_dados_questao(questao) for questao in questoes]
         resultados.append(
             {
@@ -80,6 +163,10 @@ def main() -> None:
                 "alta": sum(q["confianca"] == "alta" for q in questoes),
                 "media": sum(q["confianca"] == "media" for q in questoes),
                 "baixa": sum(q["confianca"] == "baixa" for q in questoes),
+                "gabaritos": gabaritos_aplicados,
+                "validacao": validacao,
+                "revisao_manual": validacao["revisao_manual"],
+                "banca": next((q.get("banca") for q in questoes if q.get("banca")), ""),
                 "pcimarkpci": "pcimarkpci" in texto.lower(),
             }
         )

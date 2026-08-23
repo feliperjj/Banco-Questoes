@@ -23,7 +23,7 @@ class GeradorProvaPage(QWidget):
         self.disciplina_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.topico_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.tipo_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
-        self.tabela = QTableWidget(); self.tabela.setColumnCount(5); self.tabela.setHorizontalHeaderLabels(["ID", "Nome da Prova", "Qtd Questões", "Status", "Ação"]); self.tabela.setAlternatingRowColors(True); self.tabela.setShowGrid(False); self.tabela.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed); self.tabela.setColumnWidth(4, 146); self.tabela.horizontalHeaderItem(3).setTextAlignment(Qt.AlignCenter); self.tabela.horizontalHeaderItem(4).setTextAlignment(Qt.AlignCenter); layout.addWidget(self.tabela); self.carregar_provas(); self._atualizar_disponibilidade()
+        self.tabela = QTableWidget(); self.tabela.setColumnCount(5); self.tabela.setHorizontalHeaderLabels(["ID", "Nome da Prova", "Qtd Questões", "Status", "Ação"]); self.tabela.setAlternatingRowColors(True); self.tabela.setShowGrid(False); self.tabela.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents); self.tabela.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed); self.tabela.setColumnWidth(4, 180); self.tabela.horizontalHeaderItem(3).setTextAlignment(Qt.AlignCenter); self.tabela.horizontalHeaderItem(4).setTextAlignment(Qt.AlignCenter); layout.addWidget(self.tabela); self.carregar_provas(); self._atualizar_disponibilidade()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -61,7 +61,7 @@ class GeradorProvaPage(QWidget):
         self.lbl_disponiveis.style().polish(self.lbl_disponiveis)
 
     def carregar_provas(self):
-        provas = repo.listar_provas(incluir_concluidas=True); self.tabela.setRowCount(len(provas)); self.tabela.verticalHeader().setDefaultSectionSize(48)
+        provas = repo.listar_provas(incluir_concluidas=True); self.tabela.setRowCount(len(provas)); self.tabela.verticalHeader().setDefaultSectionSize(54)
         for row, p in enumerate(provas):
             self.tabela.setItem(row, 0, QTableWidgetItem(str(p["id"]))); self.tabela.setItem(row, 1, QTableWidgetItem(p["nome"])); self.tabela.setItem(row, 2, QTableWidgetItem(str(p["qtd_questoes"])))
             status = QTableWidgetItem("Concluída" if p.get("concluida") else "Pendente")
@@ -74,8 +74,8 @@ class GeradorProvaPage(QWidget):
                 concluida.setAlignment(Qt.AlignCenter)
                 self.tabela.setCellWidget(row, 4, concluida)
                 continue
-            btn = QPushButton("Iniciar"); btn.setObjectName("table-action-button"); btn.setFixedSize(108, 32); btn.setToolTip("Iniciar esta prova"); btn.setCursor(Qt.PointingHandCursor); btn.clicked.connect(lambda checked, pid=p["id"], linha=row: self.iniciar_prova(pid, linha))
-            container = QWidget(); container_layout = QHBoxLayout(container); container_layout.setContentsMargins(6, 4, 6, 4); container_layout.setAlignment(btn, Qt.AlignCenter); container_layout.addWidget(btn); self.tabela.setCellWidget(row, 4, container)
+            btn = QPushButton("Iniciar prova"); btn.setObjectName("table-action-button"); btn.setFixedSize(150, 38); btn.setToolTip("Iniciar esta prova"); btn.setCursor(Qt.PointingHandCursor); btn.clicked.connect(lambda checked, pid=p["id"], linha=row: self.iniciar_prova(pid, linha))
+            container = QWidget(); container_layout = QHBoxLayout(container); container_layout.setContentsMargins(4, 6, 4, 6); container_layout.setAlignment(btn, Qt.AlignCenter); container_layout.addWidget(btn); self.tabela.setCellWidget(row, 4, container)
 
     def iniciar_prova(self, prova_id, row=None):
         # O botão pode ser um evento atrasado enquanto a lista é atualizada

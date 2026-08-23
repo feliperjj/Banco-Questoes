@@ -1,4 +1,14 @@
 from src.importador.extrator import _tem_duas_colunas
+from scripts.reimportar_samples import _aplicar_gabarito_validado
+
+
+def test_gabarito_so_e_aplicado_com_sequencia_completa():
+    questoes = [{}, {}, {}]
+    assert _aplicar_gabarito_validado(questoes, {1: "A", 2: "B"}) == 2
+    assert questoes[0]["gabarito"] == "A"
+    assert questoes[1]["gabarito"] == "B"
+    assert _aplicar_gabarito_validado(questoes, {1: "A", 2: "B", 3: "X"}) == 3
+    assert questoes[2]["gabarito"] == "Anulada"
 
 
 def _palavras_linha(top, inicio, quantidade, passo=10, largura=8):

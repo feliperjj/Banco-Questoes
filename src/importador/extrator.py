@@ -1,9 +1,12 @@
 import logging
 import os
 import re
+import unicodedata
 
 import docx
 import pdfplumber
+
+from src.importador.templates import selecionar_template
 
 
 logger = logging.getLogger(__name__)
@@ -233,10 +236,47 @@ def extrair_texto_docx(caminho: str) -> str:
     return texto
 
 
-def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict[int, str]:
-    """Extrai o mapa questão -> alternativa de tabelas de gabarito."""
+def _texto_comparavel(texto: str) -> str:
+    """Normaliza acentos e ruído de OCR para comparar cabeçalhos de PDFs."""
+    texto = unicodedata.normalize("NFKD", texto or "")
+    texto = "".join(char for char in texto if not unicodedata.combining(char))
+    texto = texto.replace("�", "")
+    return re.sub(r"\s+", " ", texto).strip().casefold()
+
+
+def extrair_gabaritos_pdf(
+    caminho: str,
+    codigo_prova: str | None = None,
+    cargo: str | None = None,
+) -> dict[int, str]:
+    """Extrai o mapa questão -> resposta, respeitando cargo/código quando informado.
+
+    PDFs de concursos frequentemente juntam vários cargos no mesmo arquivo de
+    gabarito. ``cargo`` funciona como seletor de contexto e impede que a
+    resposta de outro cargo sobrescreva a resposta do caderno importado.
+    ``codigo_prova`` mantém compatibilidade com o fluxo da UI.
+    """
     gabaritos = {}
     codigo_prova = (codigo_prova or "").lower().replace("-", "_")
+    cargo_normalizado = _texto_comparavel(cargo)
+
+    def linhas_do_cargo(linhas):
+        if not cargo_normalizado:
+            return linhas
+        comparaveis = [_texto_comparavel(linha) for linha in linhas]
+        inicio = next((i for i, linha in enumerate(comparaveis) if cargo_normalizado in linha), None)
+        if inicio is None:
+            return linhas
+        fim = len(linhas)
+        # Um mesmo PDF traz vários cargos em sequência. Disciplinas não são
+        # cabeçalhos de cargo e, por isso, não encerram o bloco.
+        for i in range(inicio + 1, len(linhas)):
+            linha = comparaveis[i]
+            if re.search(r"\b(?:prova\s+tipo|ibfc[_ ]\d+|cargo\s*[:\-]|agente|analista|administrador|auditor|assistente)\b", linha):
+                if not re.search(r"\b(?:lingua|raciocinio|nocoes|principios|conhecimentos|direito|informatica)\b", linha):
+                    fim = i
+                    break
+        return linhas[inicio:fim]
     with pdfplumber.open(caminho) as pdf:
         for pagina in pdf.pages:
             texto = pagina.extract_text() or ""
@@ -246,9 +286,16 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
             if codigo_prova and not pagina_especifica and not pagina_comum_superior:
                 continue
             linhas = [re.sub(r"\s+", " ", linha).strip() for linha in texto.splitlines()]
+            texto_pagina_normalizado = re.sub(r"\s+", " ", texto).casefold()
+            if cargo_normalizado and cargo_normalizado not in texto_pagina_normalizado:
+                # Não agregue uma tabela de outro cargo. O comportamento
+                # anterior aceitava qualquer página com pares numéricos e
+                # sobrescrevia respostas do bloco selecionado.
+                continue
+            linhas = linhas_do_cargo(linhas)
             pagina_multiprovas = bool(re.search(r"PROVA\s+1", texto, re.IGNORECASE) and re.search(r"PROVA\s+2", texto, re.IGNORECASE))
             pares_na_mesma_linha = [
-                re.findall(r"\b(\d{1,3})\s*[-–:]\s*([A-E])\b", linha.upper())
+                re.findall(r"\b(\d{1,3})\s*[-–:]\s*([A-EX])\b", linha.upper())
                 for linha in linhas
             ]
             if pagina_multiprovas:
@@ -265,7 +312,8 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
                     inicio = coluna * 2
                     for numero, resposta in pares[inicio:inicio + 2]:
                         gabaritos[int(numero)] = resposta
-                continue
+                if any(pares_na_mesma_linha):
+                    continue
 
             # Alguns gabaritos simples colocam todos os pares na mesma linha,
             # por exemplo: "1 - E 2 - B 3 - B ...".
@@ -290,7 +338,7 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
             # Gabaritos de múltipla escolha normalmente vêm em duas linhas:
             # "1 2 3 ..." e, logo abaixo, "A C B ...". O cabeçalho do cargo
             # permite ignorar os demais gabaritos existentes no mesmo PDF.
-            cargo_selecionado = not codigo_prova
+            cargo_selecionado = not codigo_prova or bool(cargo_normalizado)
             for indice, linha in enumerate(linhas):
                 if re.search(r"c[oó]digo\s*\d{3}", linha, re.IGNORECASE):
                     codigo = re.search(r"c[oó]digo\s*(\d{3})", linha, re.IGNORECASE).group(1)
@@ -299,7 +347,14 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
                 numeros = re.findall(r"\d{1,3}", linha) if cargo_selecionado else []
                 if not numeros or indice + 1 >= len(linhas):
                     continue
-                respostas_linha = re.findall(r"\b[A-E]\b", linhas[indice + 1].upper())
+                proxima_linha = indice + 1
+                # Alguns gabaritos inserem a disciplina entre a linha dos
+                # números e a linha das respostas (1 2 3 / Português / D C B).
+                while proxima_linha < len(linhas) and proxima_linha <= indice + 2:
+                    respostas_linha = re.findall(r"\b[A-EX]\b", linhas[proxima_linha].upper())
+                    if len(respostas_linha) == len(numeros):
+                        break
+                    proxima_linha += 1
                 if len(respostas_linha) != len(numeros):
                     continue
                 for numero, resposta in zip(numeros, respostas_linha):
@@ -308,7 +363,7 @@ def extrair_gabaritos_pdf(caminho: str, codigo_prova: str | None = None) -> dict
                 break
     logger.info("Gabarito extraído: %s itens de %s", len(gabaritos), caminho)
     if not gabaritos:
-        gabaritos = _extrair_gabaritos_ocr(caminho)
+        gabaritos = _extrair_gabaritos_ocr(caminho, cargo=cargo)
     return gabaritos
 
 
@@ -385,7 +440,30 @@ def _ler_celula(imagem, centro_y, centro_x, ocr):
     return None
 
 
-def _extrair_gabaritos_ocr(caminho: str) -> dict[int, str]:
+def _extrair_pares_ocr(deteccoes) -> dict[int, str]:
+    """Interpreta texto OCR simples quando a grade não foi detectada."""
+    if not deteccoes:
+        return {}
+    linhas = []
+    for caixa, texto, confianca in deteccoes:
+        texto = str(texto).strip().upper()
+        if not texto or confianca < OCR_CEBRASPE_CONFIANCA_MINIMA:
+            continue
+        topo = sum(ponto[1] for ponto in caixa) / 4
+        linha = next((item for item in linhas if abs(item[0] - topo) <= 10), None)
+        if linha is None:
+            linha = [topo, []]
+            linhas.append(linha)
+        linha[1].append((sum(ponto[0] for ponto in caixa) / 4, texto))
+    resultado = {}
+    for _, palavras in sorted(linhas, key=lambda item: item[0]):
+        texto = " ".join(valor for _, valor in sorted(palavras))
+        for numero, resposta in re.findall(r"\b(\d{1,3})\s*[-–:.)]?\s*([A-E])\b", texto):
+            resultado[int(numero)] = resposta
+    return resultado
+
+
+def _extrair_gabaritos_ocr(caminho: str, cargo: str | None = None) -> dict[int, str]:
     """Lê tabelas de gabarito escaneadas usando OCR somente no ambiente Python."""
     try:
         import cv2
@@ -398,11 +476,24 @@ def _extrair_gabaritos_ocr(caminho: str) -> dict[int, str]:
     try:
         with pdfplumber.open(caminho) as pdf:
             pagina = pdf.pages[0]
-            imagem = np.array(pagina.to_image(resolution=OCR_CEBRASPE_RESOLUCAO).original.convert("RGB"))
+            if cargo:
+                alvo = _texto_comparavel(cargo)
+                for candidata in pdf.pages:
+                    texto_candidata = _texto_comparavel(candidata.extract_text() or "")
+                    if alvo in texto_candidata:
+                        pagina = candidata
+                        break
+            texto_pagina = pagina.extract_text() or ""
+            template = selecionar_template(caminho, texto_pagina)
+            imagem = np.array(pagina.to_image(resolution=template.resolucao).original.convert("RGB"))
         ocr = RapidOCR()
         deteccoes, _ = ocr(imagem)
         if not deteccoes:
             return {}
+        if template.tipo != "grade":
+            resultado = _extrair_pares_ocr(deteccoes)
+            logger.info("OCR textual de gabarito: %s itens reconhecidos", len(resultado))
+            return resultado
 
         # Localiza o cabeçalho da primeira prova e usa a geometria da grade,
         # em vez de depender do texto ou da banca do documento.
@@ -416,7 +507,9 @@ def _extrair_gabaritos_ocr(caminho: str) -> dict[int, str]:
             for coluna, centro_x in enumerate(centros_x):
                 letra = _ler_celula(imagem, centro_y, centro_x, ocr)
                 if letra is not None:
-                    resultado[linha * OCR_CEBRASPE_COLUNAS_RESPOSTAS + coluna + 1] = letra
+                    resultado[linha * template.colunas + coluna + 1] = letra
+        if not resultado:
+            resultado = _extrair_pares_ocr(deteccoes)
         logger.info("OCR de gabarito: %s itens reconhecidos", len(resultado))
         return resultado
     except Exception:

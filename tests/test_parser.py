@@ -117,6 +117,24 @@ def test_detecta_disciplina_no_marcador_com_contagem():
     assert metadados["disciplinas"] == {1: "Língua Portuguesa"}
 
 
+def test_infere_banca_pelo_nome_do_arquivo_quando_texto_nao_tem_a_marca():
+    metadados = extrair_metadados_prova(
+        "1) Enunciado de teste suficientemente longo.",
+        "samples/prova-IBFC-agente.pdf",
+    )
+
+    assert metadados["banca"] == "IBFC"
+
+
+def test_reconhece_conhecimentos_basicos_e_nocoes_de_informatica():
+    questoes = parsear_questoes(
+        "Conhecimentos Básicos\n1) Questão de teste suficientemente longa para o parser.\n"
+        "Noções de Informática\n2) Outra questão de teste suficientemente longa para o parser."
+    )
+
+    assert [q["disciplina"] for q in questoes] == ["Conhecimentos Básicos", "Noções de Informática"]
+
+
 def test_confianca_alta_para_item_certo_errado_longo():
     questoes = parsear_questoes(
         "CEBRASPE\n1) Este enunciado de certo ou errado é deliberadamente longo "

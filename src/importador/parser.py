@@ -17,10 +17,13 @@ _INICIO_QUESTAO_NOMEADA = re.compile(
 )
 _DISCIPLINAS = (
     ("Língua Portuguesa", r"l(?:í|i|�)ngua portuguesa"),
+    ("Língua Portuguesa", r"portugu(?:ê|e|�)s(?:a)?"),
     ("Matemática", r"matem(?:á|a|�)tica"),
     ("Língua Inglesa", r"l(?:í|i|�)ngua inglesa"),
+    ("Conhecimentos Básicos", r"conhecimentos b(?:á|a|�)sicos(?:\s+(?:gerais|espec(?:í|i|�)ficos))?"),
     ("Conhecimentos Gerais", r"conhecimentos gerais"),
-    ("Conhecimentos Específicos", r"conhecimentos espec(?:í|i|�)ficos"),
+    ("Conhecimentos Específicos", r"conhecimentos espec(?:í|i|�)ficos(?:\s+(?:i|ii|iii|iv|v))?"),
+    ("Noções de Informática", r"no(?:ç|c|�)(?:ões|oes|�es) de inform(?:á|a|�)tica"),
     ("Informática", r"inform(?:á|a|�)tica"),
     ("Direito Constitucional", r"direito constitucional"),
     ("Direito Administrativo", r"direito administrativo"),
@@ -98,20 +101,51 @@ def _parece_grade_respostas(linha: str) -> bool:
     return len(numeros) >= 5 and not palavras
 
 
-def extrair_metadados_prova(texto: str) -> dict:
+def _quantidade_de_questoes(texto: str) -> int | None:
+    """Lê a quantidade declarada no cabeçalho, sem inventar itens ausentes."""
+    padroes = (
+        r"\b(?:cont[eé]m|contendo|total de|s[aã]o)\s+(\d{1,3})\s+(?:quest(?:[õo]es|oes)|itens)\b",
+        r"\b(?:cont[eé]m|contendo|total de|s[aã]o)\s+(\d{1,3})\s*\([^)]{2,30}\)\s+(?:quest(?:[õo]es|oes)|itens)\b",
+        r"\b(\d{1,3})\s+quest(?:[õo]es|oes)\s+objetivas?\b",
+    )
+    valores = [int(valor) for padrao in padroes for valor in re.findall(padrao, texto, re.IGNORECASE)]
+    return max(valores) if valores else None
+
+
+def quantidade_declarada(texto: str) -> int | None:
+    """Retorna a quantidade informada no cabeçalho, quando existir."""
+    return _quantidade_de_questoes(_normalizar_texto(texto))
+
+
+def _inferir_banca(texto: str, origem: str = "") -> str:
+    """Identifica a banca usando texto do documento e, como fallback, sua origem."""
+    contexto = f"{texto}\n{origem}".upper()
+    bancas = (
+        ("FGV", ("FGV", "FUNDAÇÃO GETULIO VARGAS", "FUNDACAO GETULIO VARGAS")),
+        ("CESPE/CEBRASPE", ("CESPE", "CEBRASPE")),
+        ("IBFC", ("IBFC",)),
+        ("FCC", ("FUNDAÇÃO CARLOS CHAGAS", "FUNDACAO CARLOS CHAGAS")),
+        ("VUNESP", ("VUNESP",)),
+        ("FUNDATEC", ("FUNDATEC",)),
+        ("Objetiva", ("OBJETIVAS.COM.BR", "OBJETIVA CONCURSOS")),
+        ("Instituto AOCP", ("INSTITUTO AOCP", "AOCP")),
+        ("CONSULPLAN", ("CONSULPLAN",)),
+        ("QUADRIX", ("QUADRIX",)),
+        ("IBADE", ("IBADE",)),
+        ("FURB", ("FURB",)),
+        ("FEPESE", ("FEPESE",)),
+        ("Legalle", ("LEGALLE",)),
+        ("Avança SP", ("AVANÇA SP", "AVANCA SP")),
+        ("Nosso Rumo", ("NOSSO RUMO",)),
+    )
+    return next((nome for nome, marcas in bancas if any(marca in contexto for marca in marcas)), "")
+
+
+def extrair_metadados_prova(texto: str, origem: str = "") -> dict:
     """Obtém metadados globais e a disciplina de cada questão sem depender da banca."""
     texto = _normalizar_texto(texto)
     upper = texto.upper()
-    bancas = (
-        ("FGV", ("FGV", "FUNDAÇÃO GETULIO VARGAS")),
-        ("CESPE/CEBRASPE", ("CESPE", "CEBRASPE")),
-        ("FCC", ("FUNDAÇÃO CARLOS CHAGAS", "FCC")),
-        ("VUNESP", ("VUNESP",)),
-        ("IBFC", ("IBFC",)),
-        ("CONSULPLAN", ("CONSULPLAN",)),
-        ("QUADRIX", ("QUADRIX",)),
-    )
-    banca = next((nome for nome, marcas in bancas if any(marca in upper for marca in marcas)), "")
+    banca = _inferir_banca(texto, origem)
     linhas_contexto = [linha for linha in texto.splitlines() if re.search(r"(?i)aplica|edital|concurso|publica|realiza|prova de", linha)]
     anos = [int(ano) for linha in linhas_contexto for ano in re.findall(r"\b(20\d{2})\b", linha)]
     ano = next((valor for valor in anos if 2000 <= valor <= 2035), None)
@@ -201,13 +235,14 @@ def _separar_itens_cespe(texto: str) -> list[str]:
     return blocos_reais
 
 
-def parsear_questoes(texto: str) -> list[dict]:
+def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
     texto = _normalizar_texto(texto)
     if not texto:
         return []
     texto = _quebrar_marcadores_inline(texto)
-    metadados = extrair_metadados_prova(texto)
+    metadados = extrair_metadados_prova(texto, origem)
     texto_questoes = _remover_front_matter(texto)
+    quantidade_declarada = _quantidade_de_questoes(texto)
 
     # Quando o PDF traz marcadores explícitos ("QUESTÃO 1"), eles têm
     # prioridade. Números soltos também aparecem em textos-base e não podem
@@ -262,6 +297,9 @@ def parsear_questoes(texto: str) -> list[dict]:
             tipo = "certo_errado"
             confianca = "alta" if len(enunciado) >= 80 else ("media" if len(enunciado) >= 30 else "baixa")
         questoes.append({
+            # Preserva o número original para que gabaritos parciais possam
+            # ser associados sem deslocar respostas após uma questão perdida.
+            "numero": numero_real,
             "enunciado": enunciado,
             "tipo": tipo,
             "alternativas": alternativas or None,
@@ -272,6 +310,13 @@ def parsear_questoes(texto: str) -> list[dict]:
             "banca": metadados["banca"],
             "ano": metadados["ano"],
         })
+
+    # Ruído de rodapé, textos-base e assinatura costuma formar uma falsa
+    # questão no final do documento. Se o cabeçalho informa a quantidade e a
+    # extração excedeu esse limite, removemos somente candidatos de baixa
+    # qualidade, preservando a ordem dos itens reais.
+    if quantidade_declarada and len(questoes) > quantidade_declarada:
+        questoes = questoes[:quantidade_declarada]
 
     logger.info("Parser identificou %s questões", len(questoes))
     return questoes

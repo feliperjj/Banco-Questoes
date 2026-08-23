@@ -1,12 +1,25 @@
 import logging
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 import src.models.questoes_repo as repo
 import src.models.revisao_service as revisao_svc
 
 logger = logging.getLogger(__name__)
+
+
+class _ExamOptionRow(QFrame):
+    """Linha inteira clicável, mantendo o radio como indicador visual."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class ExecucaoProvaPage(QWidget):
@@ -61,6 +74,7 @@ class ExecucaoProvaPage(QWidget):
         self.alternativas_layout.setSpacing(8)
         self.grupo_botoes = QButtonGroup(self)
         self.grupo_botoes.setExclusive(True)
+        self._option_targets = {}
         self.alternativas_scroll = QScrollArea()
         self.alternativas_scroll.setObjectName("exam-options-scroll")
         self.alternativas_scroll.setWidgetResizable(True)
@@ -151,6 +165,7 @@ class ExecucaoProvaPage(QWidget):
             self._finalizar_tentativa_automaticamente()
 
     def limpar_alternativas(self):
+        self._option_targets.clear()
         for button in self.grupo_botoes.buttons():
             self.grupo_botoes.removeButton(button)
             button.deleteLater()
@@ -171,10 +186,10 @@ class ExecucaoProvaPage(QWidget):
         if not opcoes:
             opcoes = [(letra, letra) for letra in "ABCDE"]
         for valor, rotulo in opcoes:
-            option_row = QFrame()
+            option_row = _ExamOptionRow()
             option_row.setObjectName("exam-option")
             option_row.setMinimumWidth(0)
-            option_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            option_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             option_layout = QHBoxLayout(option_row)
             option_layout.setContentsMargins(12, 8, 12, 8)
             option_layout.setSpacing(10)
@@ -185,15 +200,22 @@ class ExecucaoProvaPage(QWidget):
             label.setObjectName("exam-option-label")
             label.setWordWrap(True)
             label.setMinimumWidth(0)
-            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+            label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            label.setTextInteractionFlags(Qt.NoTextInteraction)
             option_layout.addWidget(rb)
             option_layout.addWidget(label, 1)
             self.alternativas_layout.addWidget(option_row)
             self.grupo_botoes.addButton(rb)
+            option_row.clicked.connect(rb.click)
+            label.installEventFilter(self)
+            rb.installEventFilter(self)
+            self._option_targets[label] = rb
+            self._option_targets[rb] = rb
             if self.respostas_memoria.get(q["id"]) == valor:
                 rb.setChecked(True)
             rb.toggled.connect(lambda checked, o=valor, qid=q["id"]: self.salvar_resposta_temp(checked, qid, o))
             rb.toggled.connect(lambda checked, row=option_row: self._marcar_opcao(row, checked))
+        self.alternativas_layout.addStretch(1)
         self.btn_anterior.setEnabled(self.idx_atual > 0)
         self.btn_proxima.setEnabled(self.idx_atual < len(self.questoes) - 1)
 
@@ -202,6 +224,13 @@ class ExecucaoProvaPage(QWidget):
         row.setProperty("selected", selecionada)
         row.style().unpolish(row)
         row.style().polish(row)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.MouseButtonPress and watched in self._option_targets:
+            if event.button() == Qt.LeftButton:
+                self._option_targets[watched].click()
+                return True
+        return super().eventFilter(watched, event)
 
     def salvar_resposta_temp(self, checked, q_id, opcao):
         if checked:

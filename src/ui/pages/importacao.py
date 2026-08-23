@@ -74,7 +74,7 @@ class ImportacaoPage(QWidget):
         if not caminho: return
         self.lbl_arquivo.setText(os.path.basename(caminho)); self.lista_questoes.clear(); self.painel_edicao.setDisabled(True); self.caminho_questoes = caminho; self.questoes_extraidas = []; self.item_atual = None
         try:
-            self.questoes_extraidas = parsear_questoes(extrair_texto(caminho))
+            self.questoes_extraidas = parsear_questoes(extrair_texto(caminho), caminho)
             self.classificacao_inicio.setMaximum(max(1, len(self.questoes_extraidas)))
             self.classificacao_fim.setMaximum(max(1, len(self.questoes_extraidas)))
             self.classificacao_fim.setValue(max(1, len(self.questoes_extraidas)))

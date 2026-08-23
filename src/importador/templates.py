@@ -1,0 +1,38 @@
+"""Templates de gabarito usados pelos layouts presentes em ``samples``.
+
+O template descreve a geometria, não o conteúdo da prova. Isso evita espalhar
+coordenadas calibradas pelo OCR e permite adicionar um novo layout sem alterar
+o parser de questões.
+"""
+
+from dataclasses import dataclass
+from pathlib import Path
+import re
+
+
+@dataclass(frozen=True)
+class GabaritoTemplate:
+    nome: str
+    tipo: str
+    resolucao: int = 180
+    colunas: int = 20
+    linhas: int = 4
+    marcador: str = ""
+
+
+TEMPLATE_CEBRASPE = GabaritoTemplate(
+    nome="cebraspe_grade_4x20", tipo="grade", resolucao=180, colunas=20, linhas=4,
+)
+TEMPLATE_PARES = GabaritoTemplate(nome="pares_textuais", tipo="pares")
+
+
+def selecionar_template(caminho: str, texto: str = "") -> GabaritoTemplate:
+    """Seleciona o layout por evidência do arquivo/cabeçalho.
+
+    O nome do arquivo é apenas um fallback de layout; cargo e respostas nunca
+    são inferidos por aproximação aqui.
+    """
+    contexto = f"{Path(caminho).name} {texto}".casefold()
+    if "cebraspe" in contexto:
+        return TEMPLATE_CEBRASPE
+    return TEMPLATE_PARES
