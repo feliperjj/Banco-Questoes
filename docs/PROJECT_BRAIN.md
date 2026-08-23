@@ -10,6 +10,8 @@ Este arquivo é a referência operacional antes de qualquer alteração. Ele reg
 | Banco | Peewee | `src/db/models.py` | SQLite em `data/questoes.db` |
 | Extração | PDF/DOCX | `src/importador/extrator.py` | texto normalizado |
 | Parser | texto | `src/importador/parser.py` | dicionários de questões |
+| Catálogo | caminho + cargo/prova | `config/gabaritos.json` | associação rastreável de gabarito |
+| Diagnóstico | samples + catálogo | `src/importador/diagnostico.py` | cobertura por caderno |
 | Lote | questões + tokens | `src/importador/lote.py` | gabaritos/classificação aplicados |
 | Persistência | dicionários | `src/models/questoes_repo.py` | questões, provas, tentativas |
 | UI | páginas PySide6 | `src/ui/main_window.py` | navegação e interação |
@@ -57,6 +59,8 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 - O parser não deve presumir uma banca para interpretar o documento; heurísticas específicas precisam ser opt-in ou claramente isoladas.
 - `parsear_gabarito_em_lote` só aceita tokens inteiros (`A`–`E`, `CERTO`, `ERRADO`), nunca letras no meio de palavras.
 - O vínculo usa `questao["numero"]`; índice visual só é fallback quando o documento não fornece número oficial.
+- Associações automáticas de gabarito precisam estar confirmadas em `config/gabaritos.json` por caminho relativo, cargo/prova e arquivo de resposta; não associar por semelhança de nome.
+- Respostas só são vinculadas pela interseção de números oficiais únicos. Respostas extras, faltantes ou números duplicados devem gerar diagnóstico, nunca deslocamento posicional.
 - Texto e tabelas têm precedência sobre OCR. OCR só complementa números esperados ausentes e nunca adiciona números fora do caderno.
 - PDF escaneado pode não produzir texto; nesse caso a UI deve oferecer OCR ou colagem manual, sem apagar a prévia existente.
 
@@ -70,6 +74,8 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 - Ao voltar à aba de execução sem tentativa ativa, não reutilizar conteúdo da prova anterior.
 - Questões ou alternativas longas devem quebrar linha e rolar dentro do cartão; nunca impor largura mínima maior que a tela.
 - A janela deve iniciar com o Dashboard selecionado e respeitar o mínimo de 960×640.
+- A tela de importação deve permanecer utilizável em 960×640, sem rolagem horizontal no formulário de revisão.
+- O botão `table-action-button` deve manter pelo menos 132 px de largura e 40 px reais de altura. A linha de prova usa 60 px e o seletor específico `QTableWidget#exam-table::item` não pode herdar padding vertical que comprima o widget.
 - Diálogos e mensagens visíveis ao usuário devem estar em português e explicar uma ação possível.
 - Botão de uma prova concluída deve ser um estado (`Concluída`), não um botão inativo que parece quebrado.
 
@@ -79,8 +85,10 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 2. **Metadados de banca/disciplina são incompletos.** O parser só reconhece marcas explícitas; nome do arquivo não deve ser confundido com texto extraído sem uma regra documentada.
 3. **Tentativa interrompida.** A estrutura suporta tentativa sem `finalizada_em`, mas a UI ainda não oferece retomada explícita. Não tratar tentativa aberta como concluída.
 4. **QSS é global.** Alterar um seletor genérico pode afetar tabelas, revisão e importação. Prefira `objectName` específico de página.
-5. **Dados locais não são descartáveis.** Scripts de reimportação podem recriar questões e IDs. Nunca executar limpeza/reimportação sem pedido explícito.
-6. **Layout mínimo.** O tamanho mínimo deve ser validado em monitor 1920×1080 e em janela reduzida; layouts com `minimumSize` implícito podem gerar `QWindowsWindow::setGeometry`.
+5. **Dados locais não são descartáveis.** Scripts de reimportação recriam questões e IDs e apagam provas, tentativas, respostas e revisões dependentes. Nunca executar limpeza/reimportação sem pedido explícito e criar backup do banco antes da transação.
+6. **Layout mínimo.** O tamanho mínimo deve ser validado em 1240×800 e 960×640; layouts com `minimumSize` implícito podem gerar `QWindowsWindow::setGeometry`.
+7. **Cobertura não é só diagnóstico.** Mudanças de gabarito só estão comprovadas quando a contagem prevista pelo diagnóstico também aparece persistida em `Questao.gabarito` após uma reimportação completa.
+8. **PySide6 no CI depende do sistema.** O runner Ubuntu precisa instalar `libegl1` antes de importar `PySide6.QtWidgets` e deve executar a suíte com `QT_QPA_PLATFORM=offscreen`.
 
 ## 4. Checklist antes de mudar código
 
@@ -110,6 +118,15 @@ $env:QT_QPA_PLATFORM='offscreen'
 
 Para mudanças no importador, também conferir contagem de questões, alternativas, gabaritos e tipos por arquivo. Para mudanças na prova, executar o ciclo criar → iniciar → responder parcialmente → finalizar → voltar ao gerador.
 
+Diagnóstico não destrutivo e reimportação manual autorizada:
+
+```powershell
+.venv\Scripts\python.exe scripts\diagnosticar_samples.py
+.venv\Scripts\python.exe scripts\reimportar_samples.py
+```
+
+O segundo comando é destrutivo para o banco local. Só deve ser executado após pedido explícito e backup de `data/questoes.db`.
+
 ## 5. Matriz de regressão manual
 
 | Fluxo | Resultado esperado |
@@ -117,8 +134,10 @@ Para mudanças no importador, também conferir contagem de questões, alternativ
 | Abrir o app | Janela abre sem mensagem de geometria e sem tamanho mínimo impossível |
 | Importar PDF com alternativas | Todas as questões e alternativas aparecem na prévia |
 | Importar gabarito | Quantidade reconhecida é informada; questões sem gabarito permanecem revisáveis |
+| Revisar importação em 960×640 | Formulário quebra em linhas verticais e não cria rolagem horizontal |
 | Salvar lote | Banco cresce uma vez; alternativas acompanham suas questões |
 | Criar prova | Nova prova aparece na tabela com status Pendente |
+| Botão Iniciar prova | Área clicável não fica esmagada; botão mantém altura mínima de 40 px |
 | Iniciar prova | Questão e alternativas aparecem, timer começa, finalizar fica habilitado |
 | Questão longa | Texto quebra/rola sem estourar monitor |
 | Finalizar parcialmente | Nota considera todas as questões; prova vira Concluída |
@@ -138,6 +157,9 @@ Para mudanças no importador, também conferir contagem de questões, alternativ
 - Nota de prova parcial podia usar somente o número de respostas dadas; o total agora vem da composição da prova.
 - Aplicar gabarito depois de salvar uma questão individual podia usar a posição visual errada; a prévia agora usa o índice original da questão.
 - Trocar uma questão de múltipla escolha para certo/errado podia deixar alternativas órfãs; a atualização agora as remove.
+- O botão “Iniciar prova” ficava esmagado porque o padding global das células reduzia a geometria do widget; a tabela de provas agora possui padding específico, linha de 60 px e botão de 40 px.
+- O formulário de importação criava rolagem horizontal em janela mínima; os rótulos agora ficam acima dos campos e o painel cresce dentro da área rolável.
+- O CI Linux falhava durante a coleta com `ImportError: libEGL.so.1`; o workflow agora instala `libegl1` e força o backend Qt offscreen.
 
 ## 7. Como consultar este cérebro
 
@@ -156,6 +178,23 @@ Para mudanças no importador, também conferir contagem de questões, alternativ
 - Extração: `src/importador/extrator.py`.
 - Parsing: `src/importador/parser.py`.
 - Contratos de lote: `src/importador/lote.py`.
+- Catálogo de associações: `config/gabaritos.json` e `src/importador/catalogo.py`.
+- Diagnóstico de cobertura: `src/importador/diagnostico.py` e `scripts/diagnosticar_samples.py`.
+- Reimportação transacional: `scripts/reimportar_samples.py`.
 - Navegação: `src/ui/main_window.py`.
 - Aparência: `src/ui/styles.qss`.
 - Testes automatizados: `tests/`.
+- Integração contínua e dependências Qt do runner: `.github/workflows/ci.yml`.
+
+## 9. Estado verificado em 23/08/2026
+
+- 23 PDFs de questões processados sem falha técnica.
+- 979 questões e 4.100 alternativas persistidas.
+- 820 questões com gabarito e 159 sem gabarito: **83,76% de cobertura**.
+- Meta de 80% superada em 37 vínculos; ganho de 269 vínculos e 27,48 p.p. sobre os 551/979 históricos.
+- Distribuição persistida: A 146, B 158, C 153, D 143, E 109, Certo 41, Errado 50 e Anulada 20.
+- Após a reimportação: 0 provas, 0 tentativas, 0 respostas e 0 revisões, conforme a limpeza referencial esperada.
+- Backup anterior à reimportação: `data/questoes.pre-reimport-2026-08-23.db` (arquivo local ignorado pelo Git).
+- UI validada em 960×640 e 1240×800; botão “Iniciar prova” medido em 142×40 px com o QSS carregado.
+- Suíte automatizada: **49 testes passando**.
+- Relatórios versionados: `docs/RELATORIO_REIMPORTACAO_SAMPLES.md` e `docs/RELATORIO_DIAGNOSTICO_GABARITOS.md`.
