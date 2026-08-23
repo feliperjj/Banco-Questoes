@@ -1,5 +1,5 @@
 import src.importador.extrator as extrator
-from src.importador.extrator import _extrair_gabaritos_tabelas, _tem_duas_colunas
+from src.importador.extrator import FiltroContexto, _extrair_gabaritos_tabelas, _tem_duas_colunas
 from scripts.reimportar_samples import _aplicar_gabarito_validado
 
 
@@ -81,3 +81,12 @@ def test_ocr_completa_somente_numeros_esperados(monkeypatch):
     resultado = extrator.extrair_gabaritos_pdf("gab.pdf", numeros_esperados={1, 2, 3})
 
     assert resultado == {1: "A", 2: "B", 3: "C"}
+
+
+def test_filtro_contexto_preserva_cargo_selecionado():
+    contexto = FiltroContexto("prova-1", "Analista de Sistemas")
+
+    assert contexto.pagina_relevante("Código: prova_1\nCargo: Analista de Sistemas")
+    assert contexto.pagina_relevante("1 A 2 B")
+    assert not contexto.pagina_relevante("Cargo: Auditor\n1 C 2 D")
+    assert not contexto.pagina_relevante("1 C 2 D")

@@ -5,6 +5,7 @@ import unicodedata
 
 import docx
 import pdfplumber
+from pdfminer.pdfdocument import PDFSyntaxError
 
 from src.importador.templates import selecionar_template
 
@@ -43,6 +44,7 @@ OCR_CEBRASPE_CONFIANCA_MINIMA = 0.35
 
 
 def _normalizar_pagina(texto: str) -> str:
+    texto = _corrigir_encoding_ocr(texto)
     texto = texto.replace("\xa0", " ").replace("\r\n", "\n").replace("\r", "\n")
     # Une palavras quebradas no fim da linha, sem destruir a separação de questões.
     texto = re.sub(r"(?<=\w)-\n(?=\w)", "", texto)
@@ -56,6 +58,20 @@ def _normalizar_pagina(texto: str) -> str:
             continue
         linhas.append(linha)
     return "\n".join(linhas)
+
+
+def _corrigir_encoding_ocr(texto: str) -> str:
+    """Normaliza palavras afetadas pelo caractere de substituição do OCR."""
+    for padrao, substituicao in (
+        (r"l[�i]ngua", "lingua"),
+        (r"inform[�a]tica", "informatica"),
+        (r"racioc[�i]nio", "raciocinio"),
+        (r"matem[�a]tica", "matematica"),
+        (r"quest[�a]o", "questao"),
+        (r"quest[�a]es", "questoes"),
+    ):
+        texto = re.sub(padrao, substituicao, texto, flags=re.IGNORECASE)
+    return texto
 
 
 def _linhas_repetidas(paginas: list[str]) -> set[str]:
@@ -240,7 +256,7 @@ def _texto_comparavel(texto: str) -> str:
     """Normaliza acentos e ruído de OCR para comparar cabeçalhos de PDFs."""
     texto = unicodedata.normalize("NFKD", texto or "")
     texto = "".join(char for char in texto if not unicodedata.combining(char))
-    texto = texto.replace("�", "")
+    texto = _corrigir_encoding_ocr(texto).replace("�", "")
     return re.sub(r"\s+", " ", texto).strip().casefold()
 
 
@@ -249,7 +265,7 @@ def _extrair_gabaritos_tabelas(pagina) -> dict[int, str]:
     resultado = {}
     try:
         tabelas = pagina.extract_tables() or []
-    except Exception:
+    except (PDFSyntaxError, ValueError, TypeError, AttributeError):
         logger.exception("Falha ao extrair tabela de gabarito")
         return resultado
     for tabela in tabelas:
@@ -265,6 +281,152 @@ def _extrair_gabaritos_tabelas(pagina) -> dict[int, str]:
                         resultado.setdefault(int(numero.group(1)), token.group(1))
                         break
     return resultado
+
+
+def _extrair_pares_mesma_linha(linhas: list[str]) -> dict[int, str]:
+    resultado = {}
+    for linha in linhas:
+        for numero, resposta in re.findall(
+            r"\b(\d{1,3})\s*(?:[-–:.)]\s*)?([A-EX])\b", linha.upper()
+        ):
+            resultado[int(numero)] = resposta
+    return resultado
+
+
+def _extrair_itens_certo_errado(linhas: list[str]) -> dict[int, str]:
+    resultado = {}
+    for indice, linha in enumerate(linhas):
+        if not re.match(r"^Item\s+", linha, re.IGNORECASE) or indice + 1 >= len(linhas):
+            continue
+        itens = [int(valor) for valor in re.findall(r"\d+", linha)]
+        respostas = re.findall(r"\b[CE]\b", linhas[indice + 1].upper())
+        for item, resposta in zip(itens, respostas):
+            if item:
+                resultado[item] = "Certo" if resposta == "C" else "Errado"
+    return resultado
+
+
+def _extrair_duas_linhas(linhas: list[str], codigo_prova: str, cargo_normalizado: str) -> dict[int, str]:
+    resultado = {}
+    cargo_selecionado = not codigo_prova or bool(cargo_normalizado)
+    for indice, linha in enumerate(linhas):
+        codigo_match = re.search(r"c[oó]digo\s*\d{3}", linha, re.IGNORECASE)
+        if codigo_match:
+            codigo = re.search(r"c[oó]digo\s*(\d{3})", linha, re.IGNORECASE).group(1)
+            cargo_selecionado = not codigo_prova or codigo in codigo_prova
+            continue
+        numeros = re.findall(r"\d{1,3}", linha) if cargo_selecionado else []
+        if not numeros or indice + 1 >= len(linhas):
+            continue
+        proxima_linha = indice + 1
+        respostas_linha = []
+        while proxima_linha < len(linhas) and proxima_linha <= indice + 2:
+            respostas_linha = re.findall(r"\b[A-EX]\b", linhas[proxima_linha].upper())
+            if len(respostas_linha) == len(numeros):
+                break
+            proxima_linha += 1
+        if len(respostas_linha) != len(numeros):
+            continue
+        for numero, resposta in zip(numeros, respostas_linha):
+            resultado[int(numero)] = resposta
+    return resultado
+
+
+class ExtratorBanca:
+    def extrair(self, linhas: list[str]) -> dict[int, str]:
+        raise NotImplementedError
+
+
+class ExtratorPadrao(ExtratorBanca):
+    def __init__(self, codigo_prova: str, cargo_normalizado: str):
+        self.codigo_prova = codigo_prova
+        self.cargo_normalizado = cargo_normalizado
+
+    def extrair(self, linhas: list[str]) -> dict[int, str]:
+        resultado = _extrair_pares_mesma_linha(linhas)
+        if resultado:
+            return resultado
+        # O layout CEBRASPE pode conter Item/Certo-Errado e, na mesma página,
+        # uma sequência em duas linhas. A implementação anterior acumulava os
+        # dois blocos; manter essa união é parte da paridade do parser.
+        resultado = _extrair_itens_certo_errado(linhas)
+        resultado.update(_extrair_duas_linhas(
+            linhas, self.codigo_prova, self.cargo_normalizado,
+        ))
+        return resultado
+
+
+class ExtratorMultiprova(ExtratorBanca):
+    def __init__(self, codigo_prova: str):
+        self.codigo_prova = codigo_prova
+
+    def extrair(self, linhas: list[str]) -> dict[int, str]:
+        pares = [
+            re.findall(r"\b(\d{1,3})\s*(?:[-–:.)]\s*)?([A-EX])\b", linha.upper())
+            for linha in linhas
+        ]
+        coluna = 0
+        encontrado = re.search(r"(?:PROVA\s*)?(\d+)", self.codigo_prova, re.IGNORECASE)
+        if encontrado:
+            coluna = max(0, min(int(encontrado.group(1)) - 1, 3))
+        resultado = {}
+        for pares_linha in pares:
+            inicio = coluna * 2
+            for numero, resposta in pares_linha[inicio:inicio + 2]:
+                resultado[int(numero)] = resposta
+        return resultado
+
+
+def selecionar_extrator(texto: str, codigo_prova: str = "", cargo_normalizado: str = "") -> ExtratorBanca:
+    if re.search(r"PROVA\s*1", texto, re.IGNORECASE) and re.search(r"PROVA\s*2", texto, re.IGNORECASE):
+        return ExtratorMultiprova(codigo_prova)
+    return ExtratorPadrao(codigo_prova, cargo_normalizado)
+
+
+class FiltroContexto:
+    def __init__(self, codigo_prova: str | None = None, cargo: str | None = None):
+        self.codigo_prova = (codigo_prova or "").lower().replace("-", "_")
+        self.cargo_normalizado = _texto_comparavel(cargo)
+        self.cargo_ativo = not bool(cargo)
+        self.codigo_ativo = not bool(self.codigo_prova)
+
+    def pagina_relevante(self, texto: str) -> bool:
+        texto_normalizado = texto.lower().replace("-", "_")
+        if not self.codigo_prova or self.codigo_prova in texto_normalizado:
+            self.codigo_ativo = True
+        outro_codigo = re.search(r"c[oó]digo\s*[:\-]?\s*([a-z0-9_]+)", texto_normalizado)
+        if self.codigo_ativo and outro_codigo and self.codigo_prova and self.codigo_prova not in outro_codigo.group(1):
+            self.codigo_ativo = False
+            return False
+        if self.codigo_prova and not self.codigo_ativo and "dpf14_cbns01" not in texto_normalizado:
+            return False
+        comparavel = re.sub(r"\s+", " ", texto).casefold()
+        if self.cargo_normalizado and self.cargo_normalizado not in comparavel and not self.cargo_ativo:
+            return False
+        if self.cargo_normalizado in comparavel:
+            self.cargo_ativo = True
+        if self.cargo_ativo and self.cargo_normalizado and re.search(
+            r"\b(?:cargo|agente|analista|administrador|auditor)\b", comparavel
+        ) and self.cargo_normalizado not in comparavel:
+            self.cargo_ativo = False
+            return False
+        return True
+
+    def linhas_do_cargo(self, linhas: list[str]) -> list[str]:
+        if not self.cargo_normalizado:
+            return linhas
+        comparaveis = [_texto_comparavel(linha) for linha in linhas]
+        inicio = next((i for i, linha in enumerate(comparaveis) if self.cargo_normalizado in linha), None)
+        if inicio is None:
+            return linhas
+        fim = len(linhas)
+        for i in range(inicio + 1, len(linhas)):
+            linha = comparaveis[i]
+            if re.search(r"\b(?:prova\s+tipo|ibfc[_ ]\d+|cargo\s*[:\-]|agente|analista|administrador|auditor|assistente)\b", linha):
+                if not re.search(r"\b(?:lingua|raciocinio|nocoes|principios|conhecimentos|direito|informatica)\b", linha):
+                    fim = i
+                    break
+        return linhas[inicio:fim]
 
 
 def extrair_gabaritos_pdf(
@@ -284,123 +446,21 @@ def extrair_gabaritos_pdf(
     """
     gabaritos = {}
     paginas_relevantes = []
-    cargo_ativo = not bool(cargo)
-    codigo_prova = (codigo_prova or "").lower().replace("-", "_")
-    codigo_ativo = not bool(codigo_prova)
-    cargo_normalizado = _texto_comparavel(cargo)
-
-    def linhas_do_cargo(linhas):
-        if not cargo_normalizado:
-            return linhas
-        comparaveis = [_texto_comparavel(linha) for linha in linhas]
-        inicio = next((i for i, linha in enumerate(comparaveis) if cargo_normalizado in linha), None)
-        if inicio is None:
-            return linhas
-        fim = len(linhas)
-        # Um mesmo PDF traz vários cargos em sequência. Disciplinas não são
-        # cabeçalhos de cargo e, por isso, não encerram o bloco.
-        for i in range(inicio + 1, len(linhas)):
-            linha = comparaveis[i]
-            if re.search(r"\b(?:prova\s+tipo|ibfc[_ ]\d+|cargo\s*[:\-]|agente|analista|administrador|auditor|assistente)\b", linha):
-                if not re.search(r"\b(?:lingua|raciocinio|nocoes|principios|conhecimentos|direito|informatica)\b", linha):
-                    fim = i
-                    break
-        return linhas[inicio:fim]
+    contexto = FiltroContexto(codigo_prova, cargo)
     with pdfplumber.open(caminho) as pdf:
         for numero_pagina, pagina in enumerate(pdf.pages):
-            texto = pagina.extract_text() or ""
-            texto_normalizado = texto.lower().replace("-", "_")
-            pagina_especifica = not codigo_prova or codigo_prova in texto_normalizado
-            pagina_comum_superior = "dpf14_cbns01" in texto_normalizado
-            if pagina_especifica:
-                codigo_ativo = True
-            outro_codigo = re.search(r"c[oó]digo\s*[:\-]?\s*([a-z0-9_]+)", texto_normalizado)
-            if codigo_ativo and outro_codigo and codigo_prova and codigo_prova not in outro_codigo.group(1):
-                codigo_ativo = False
-                continue
-            if codigo_prova and not codigo_ativo and not pagina_comum_superior:
+            texto = _corrigir_encoding_ocr(pagina.extract_text() or "")
+            if not contexto.pagina_relevante(texto):
                 continue
             linhas = [re.sub(r"\s+", " ", linha).strip() for linha in texto.splitlines()]
-            texto_pagina_normalizado = re.sub(r"\s+", " ", texto).casefold()
-            if cargo_normalizado and cargo_normalizado not in texto_pagina_normalizado and not cargo_ativo:
-                # Não agregue uma tabela de outro cargo. O comportamento
-                # anterior aceitava qualquer página com pares numéricos e
-                # sobrescrevia respostas do bloco selecionado.
-                continue
-            if cargo_normalizado in texto_pagina_normalizado:
-                cargo_ativo = True
-            # Um cabeçalho inequívoco de outro cargo encerra o bloco atual.
-            if cargo_ativo and cargo_normalizado and re.search(r"\b(?:cargo|agente|analista|administrador|auditor)\b", texto_pagina_normalizado) and cargo_normalizado not in texto_pagina_normalizado:
-                cargo_ativo = False
-                continue
             paginas_relevantes.append(numero_pagina)
-            linhas = linhas_do_cargo(linhas)
-            pagina_multiprovas = bool(re.search(r"PROVA\s+1", texto, re.IGNORECASE) and re.search(r"PROVA\s+2", texto, re.IGNORECASE))
-            pares_na_mesma_linha = [
-                re.findall(r"\b(\d{1,3})\s*(?:[-–:.)]\s*)?([A-EX])\b", linha.upper())
-                for linha in linhas
-            ]
-            if pagina_multiprovas:
-                # O gabarito do nível superior imprime quatro provas lado a
-                # lado. Cada linha traz dois pares por prova (21/46, 22/47,
-                # ...). Para este caderno, PROVA 1 é Administração e é a
-                # coluna usada quando nenhum código específico foi informado.
-                coluna = 0
-                if codigo_prova:
-                    encontrado = re.search(r"(?:PROVA\s*)?(\d+)", codigo_prova, re.IGNORECASE)
-                    if encontrado:
-                        coluna = max(0, min(int(encontrado.group(1)) - 1, 3))
-                for pares in pares_na_mesma_linha:
-                    inicio = coluna * 2
-                    for numero, resposta in pares[inicio:inicio + 2]:
-                        gabaritos[int(numero)] = resposta
-                if any(pares_na_mesma_linha):
-                    continue
-
-            # Alguns gabaritos simples colocam todos os pares na mesma linha,
-            # por exemplo: "1 - E 2 - B 3 - B ...".
-            encontrou_pares = False
-            for pares in pares_na_mesma_linha:
-                for numero, resposta in pares:
-                    gabaritos[int(numero)] = resposta
-                    encontrou_pares = True
-            if encontrou_pares:
+            linhas = contexto.linhas_do_cargo(linhas)
+            resultado = selecionar_extrator(
+                texto, contexto.codigo_prova, contexto.cargo_normalizado,
+            ).extrair(linhas)
+            if resultado:
+                gabaritos.update(resultado)
                 continue
-
-            for indice, linha in enumerate(linhas):
-                if not re.match(r"^Item\s+", linha, re.IGNORECASE):
-                    continue
-                itens = [int(valor) for valor in re.findall(r"\d+", linha)]
-                if indice + 1 >= len(linhas):
-                    continue
-                respostas = re.findall(r"\b[CE]\b", linhas[indice + 1].upper())
-                for item, resposta in zip(itens, respostas):
-                    if item:
-                        gabaritos[item] = "Certo" if resposta == "C" else "Errado"
-            # Gabaritos de múltipla escolha normalmente vêm em duas linhas:
-            # "1 2 3 ..." e, logo abaixo, "A C B ...". O cabeçalho do cargo
-            # permite ignorar os demais gabaritos existentes no mesmo PDF.
-            cargo_selecionado = not codigo_prova or bool(cargo_normalizado)
-            for indice, linha in enumerate(linhas):
-                if re.search(r"c[oó]digo\s*\d{3}", linha, re.IGNORECASE):
-                    codigo = re.search(r"c[oó]digo\s*(\d{3})", linha, re.IGNORECASE).group(1)
-                    cargo_selecionado = not codigo_prova or codigo in codigo_prova
-                    continue
-                numeros = re.findall(r"\d{1,3}", linha) if cargo_selecionado else []
-                if not numeros or indice + 1 >= len(linhas):
-                    continue
-                proxima_linha = indice + 1
-                # Alguns gabaritos inserem a disciplina entre a linha dos
-                # números e a linha das respostas (1 2 3 / Português / D C B).
-                while proxima_linha < len(linhas) and proxima_linha <= indice + 2:
-                    respostas_linha = re.findall(r"\b[A-EX]\b", linhas[proxima_linha].upper())
-                    if len(respostas_linha) == len(numeros):
-                        break
-                    proxima_linha += 1
-                if len(respostas_linha) != len(numeros):
-                    continue
-                for numero, resposta in zip(numeros, respostas_linha):
-                    gabaritos[int(numero)] = resposta
             if len(gabaritos) >= 120 and codigo_prova:
                 break
     logger.info("Gabarito extraído: %s itens de %s", len(gabaritos), caminho)
@@ -563,7 +623,7 @@ def _extrair_gabaritos_ocr(
                     resultado.setdefault(numero, resposta)
         logger.info("OCR de gabarito: %s itens reconhecidos", len(resultado))
         return resultado
-    except Exception:
+    except (ImportError, RuntimeError, PDFSyntaxError):
         logger.exception("Falha ao executar OCR do gabarito %s", caminho)
         return {}
 
