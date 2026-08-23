@@ -14,7 +14,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Banco de Questões")
         self.setMinimumSize(960, 640)
-        self.resize(1180, 760)
+        self.resize(1240, 800)
         main_widget = QWidget()
         main_widget.setMinimumSize(0, 0)
         layout = QHBoxLayout(main_widget)
@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(236)
+        sidebar.setFixedWidth(220)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(18, 24, 18, 18)
         sidebar_layout.setSpacing(8)

@@ -1,4 +1,5 @@
-from src.importador.extrator import _tem_duas_colunas
+import src.importador.extrator as extrator
+from src.importador.extrator import _extrair_gabaritos_tabelas, _tem_duas_colunas
 from scripts.reimportar_samples import _aplicar_gabarito_validado
 
 
@@ -33,3 +34,50 @@ def test_detecta_duas_colunas_por_linhas_confinadas():
         palavras.extend(_palavras_linha(topo, 430, 6, passo=25))
 
     assert _tem_duas_colunas(palavras, 800)
+
+
+def test_extrai_tabela_apenas_com_numero_e_resposta():
+    class Pagina:
+        def extract_tables(self):
+            return [[['Código', 'Resposta'], ['12', 'B'], ['2026', 'A'], ['13', 'X']]]
+
+    assert _extrair_gabaritos_tabelas(Pagina()) == {12: 'B', 13: 'X'}
+
+
+class _PdfFalso:
+    def __init__(self, paginas):
+        self.pages = paginas
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+
+class _PaginaGabarito:
+    def extract_text(self):
+        return "1 A 2 B"
+
+    def extract_tables(self):
+        return []
+
+
+def test_ocr_nao_roda_quando_gabarito_curto_ja_esta_completo(monkeypatch):
+    monkeypatch.setattr(extrator.pdfplumber, "open", lambda caminho: _PdfFalso([_PaginaGabarito()]))
+    chamadas = []
+    monkeypatch.setattr(extrator, "_extrair_gabaritos_ocr", lambda *args, **kwargs: chamadas.append(1) or {})
+
+    resultado = extrator.extrair_gabaritos_pdf("gab.pdf")
+
+    assert resultado == {1: "A", 2: "B"}
+    assert chamadas == []
+
+
+def test_ocr_completa_somente_numeros_esperados(monkeypatch):
+    monkeypatch.setattr(extrator.pdfplumber, "open", lambda caminho: _PdfFalso([_PaginaGabarito()]))
+    monkeypatch.setattr(extrator, "_extrair_gabaritos_ocr", lambda *args, **kwargs: {3: "C", 4: "D"})
+
+    resultado = extrator.extrair_gabaritos_pdf("gab.pdf", numeros_esperados={1, 2, 3})
+
+    assert resultado == {1: "A", 2: "B", 3: "C"}

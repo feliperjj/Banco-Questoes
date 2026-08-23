@@ -1,11 +1,12 @@
 import os
 
 from peewee import SqliteDatabase
+from src.config import DB_PATH
+from src.db.migrations import apply_migrations
 
 
-DB_DIR = "data"
-DB_PATH = os.path.join(DB_DIR, "questoes.db")
-db = SqliteDatabase(DB_PATH, pragmas={"foreign_keys": 1})
+DB_DIR = DB_PATH.parent
+db = SqliteDatabase(str(DB_PATH), pragmas={"foreign_keys": 1})
 
 
 def _configure_database(db_path):
@@ -22,7 +23,10 @@ def init_db(db_path=None):
     db.connect(reuse_if_open=True)
     from src.db.models import ALL_MODELS
     db.create_tables(ALL_MODELS, safe=True)
+    apply_migrations(db)
     return db
+
+
 
 
 class _ConnectionCompatibility:

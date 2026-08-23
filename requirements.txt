@@ -4,3 +4,5 @@ pdfplumber
 python-docx
 peewee
 rapidocr_onnxruntime
+matplotlib>=3.7,<4
+opencv-python-headless>=4.8,<5

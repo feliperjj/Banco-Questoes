@@ -13,6 +13,7 @@ __pycache__/
 # Banco local, logs e arquivos gerados pela aplicação
 data/
 samples/
+reports/
 
 # OCR/modelos e instaladores locais
 tools/

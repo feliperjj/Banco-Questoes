@@ -3,10 +3,11 @@ import random
 
 import datetime
 
-from peewee import Case, JOIN, fn
+from peewee import Case, JOIN, fn, prefetch
 
 from src.db.database import db, init_db
 from src.db.models import Alternativa, Prova, ProvaQuestao, Questao, Resposta, RevisaoEspacada, Tentativa
+from src.importador.validacao import gabarito_valido, normalizar_gabarito
 
 
 CAMPOS_QUESTAO = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario")
@@ -34,7 +35,7 @@ def _tempo_limite_da_configuracao(configuracao: dict) -> int:
 def _questao_dict(questao):
     dados = _as_dict(questao)
     if questao.tipo == "multipla_escolha":
-        dados["alternativas"] = [_as_dict(alt, ["letra", "texto"]) for alt in Alternativa.select().where(Alternativa.questao == questao.id)]
+        dados["alternativas"] = [_as_dict(alt, ["letra", "texto"]) for alt in questao.alternativas]
     return dados
 
 
@@ -94,7 +95,7 @@ def buscar_questoes(filtros: dict = None, texto: str = None) -> list[dict]:
         query = query.where(Questao.tipo == filtros["tipo"])
     if filtros and filtros.get("topico"):
         query = query.where(Questao.topico == filtros["topico"])
-    return [_questao_dict(questao) for questao in query]
+    return [_questao_dict(questao) for questao in prefetch(query, Alternativa)]
 
 
 def listar_disciplinas() -> list[str]:
@@ -121,7 +122,12 @@ def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int
     init_db()
     if quantidade <= 0:
         return 0
-    query = Questao.select(Questao.id).where(Questao.ativa == True)
+    # Questões anuladas continuam no histórico, mas não compõem novas provas:
+    # elas não são avaliáveis e poderiam gerar uma prova com denominador zero.
+    query = Questao.select(Questao.id).where(
+        (Questao.ativa == True)
+        & Questao.gabarito.in_(["A", "B", "C", "D", "E", "Certo", "Errado"])
+    )
     if filtros and filtros.get("disciplina"):
         query = query.where(Questao.disciplina == filtros["disciplina"])
     if filtros and filtros.get("tipo"):
@@ -177,6 +183,18 @@ def obter_prova(prova_id: int) -> dict | None:
 
 def iniciar_tentativa(prova_id: int) -> int:
     init_db()
+    prova = Prova.get_or_none(Prova.id == prova_id)
+    if prova is None:
+        raise ValueError("A prova informada não existe.")
+    if Tentativa.select().where(
+        (Tentativa.prova == prova_id) & Tentativa.finalizada_em.is_null(False)
+    ).exists():
+        raise ValueError("Esta prova já foi finalizada.")
+    aberta = Tentativa.get_or_none(
+        (Tentativa.prova == prova_id) & Tentativa.finalizada_em.is_null(True)
+    )
+    if aberta is not None:
+        return aberta.id
     return Tentativa.create(prova=prova_id).id
 
 
@@ -195,17 +213,22 @@ def finalizar_tentativa(tentativa_id: int, respostas_usuario: dict, tempo_gasto_
         invalidas = set(respostas_usuario) - questoes_da_prova
         if invalidas:
             raise ValueError("A tentativa contém respostas para questões que não pertencem à prova.")
-        total_questoes = (ProvaQuestao.select()
-                           .where(ProvaQuestao.prova == tentativa.prova_id)
-                           .count()) or total_questoes
+        total_questoes = (ProvaQuestao.select(ProvaQuestao, Questao)
+                           .join(Questao)
+                           .where((ProvaQuestao.prova == tentativa.prova_id) & (Questao.gabarito != "Anulada"))
+                           .count())
     with db.atomic():
         for q_id, resposta in respostas_usuario.items():
             questao = Questao.get_by_id(q_id)
-            correta = resposta == questao.gabarito
+            if questao.gabarito == "Anulada":
+                continue
+            resposta_normalizada = normalizar_gabarito(resposta, questao.tipo)
+            gabarito_normalizado = normalizar_gabarito(questao.gabarito, questao.tipo)
+            correta = resposta_normalizada == gabarito_normalizado
             total_acertos += int(correta)
             if not correta:
                 detalhes_erradas.append({"id": q_id, "enunciado": questao.enunciado, "marcada": resposta, "correta": questao.gabarito})
-            Resposta.create(tentativa=tentativa_id, questao=q_id, resposta_marcada=resposta, correta=correta)
+            Resposta.create(tentativa=tentativa_id, questao=q_id, resposta_marcada=resposta_normalizada, correta=correta)
         nota = (total_acertos / total_questoes * 100) if total_questoes else 0
         Tentativa.update(finalizada_em=datetime.datetime.now(), total_acertos=total_acertos, nota=nota, tempo_gasto_seg=tempo_gasto_seg).where(Tentativa.id == tentativa_id).execute()
     return {"acertos": total_acertos, "total": total_questoes, "nota": nota, "erradas": detalhes_erradas}
@@ -214,7 +237,7 @@ def finalizar_tentativa(tentativa_id: int, respostas_usuario: dict, tempo_gasto_
 def buscar_questoes_da_prova(prova_id: int) -> list[dict]:
     init_db()
     query = Questao.select().join(ProvaQuestao).where(ProvaQuestao.prova == prova_id).order_by(ProvaQuestao.ordem)
-    return [_questao_dict(questao) for questao in query]
+    return [_questao_dict(questao) for questao in prefetch(query, Alternativa)]
 
 
 def desempenho_por_disciplina() -> list[dict]:

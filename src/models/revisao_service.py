@@ -1,4 +1,5 @@
 import datetime
+from peewee import prefetch
 
 from src.db.database import db, init_db
 from src.db.models import Alternativa, Questao, RevisaoEspacada
@@ -49,12 +50,13 @@ def questoes_para_revisar_hoje() -> list[dict]:
     init_db()
     query = (Questao.select(Questao, RevisaoEspacada)
              .join(RevisaoEspacada, attr="revisao")
-             .where(RevisaoEspacada.proxima_revisao <= datetime.date.today()))
+             .where((Questao.ativa == True) & (Questao.gabarito != "Anulada") &
+                    (RevisaoEspacada.proxima_revisao <= datetime.date.today())))
     questoes = []
-    for questao in query:
+    for questao in prefetch(query, Alternativa):
         revisao = questao.revisao
         dados = {"id": questao.id, "enunciado": questao.enunciado, "tipo": questao.tipo, "gabarito": questao.gabarito, "proxima_revisao": str(revisao.proxima_revisao)}
         if questao.tipo == "multipla_escolha":
-            dados["alternativas"] = [{"letra": alt.letra, "texto": alt.texto} for alt in Alternativa.select().where(Alternativa.questao == questao.id)]
+            dados["alternativas"] = [{"letra": alt.letra, "texto": alt.texto} for alt in questao.alternativas]
         questoes.append(dados)
     return questoes
