@@ -197,4 +197,8 @@ O segundo comando é destrutivo para o banco local. Só deve ser executado após
 - Backup anterior à reimportação: `data/questoes.pre-reimport-2026-08-23.db` (arquivo local ignorado pelo Git).
 - UI validada em 960×640 e 1240×800; botão “Iniciar prova” medido em 142×40 px com o QSS carregado.
 - Suíte automatizada: **49 testes passando**.
+- Após o refactor de `src/importador/extrator.py`: 23 cadernos, 979 questões,
+  996 respostas extraídas e 820 vínculos (**83,76%**), com paridade campo a
+  campo confirmada nas rodadas com e sem OCR; suíte automatizada: **50 testes
+  passando**.
 - Relatórios versionados: `docs/RELATORIO_REIMPORTACAO_SAMPLES.md` e `docs/RELATORIO_DIAGNOSTICO_GABARITOS.md`.

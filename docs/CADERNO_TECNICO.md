@@ -433,6 +433,16 @@ Na UI, `em_andamento` é a autoridade do estado. Ao finalizar, a página:
 
 **Motivo:** invariantes importantes não podem depender de um único botão.
 
+### Decisão 11 — Estratégias de gabarito extraídas por layout
+
+**Problema:** o roteamento de cargo/código e as heurísticas de gabarito estavam concentrados em um único loop, dificultando validar cada layout sem alterar a precedência existente.
+
+**Decisão:** separar estratégias puras para pares na mesma linha, Item/Certo-Errado, sequências em duas linhas e multiprova; selecionar a estratégia por evidência textual e manter o estado de cargo/código em `FiltroContexto`.
+
+**Motivo:** reduz a complexidade acidental e torna explícita a precedência texto/tabela/OCR, preservando o vínculo por número oficial.
+
+**Evidência:** a rodada pós-refactor reproduziu os 23 cadernos, 979 questões, 996 respostas extraídas e 820 vínculos, com e sem OCR.
+
 ## 8. Testes e evidências
 
 A suíte cobre atualmente:
