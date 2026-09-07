@@ -1,8 +1,8 @@
-PySide6
-pytest
-pdfplumber
-python-docx
-peewee
-rapidocr_onnxruntime
-matplotlib>=3.7,<4
-opencv-python-headless>=4.8,<5
+PySide6==6.11.2
+pytest==9.1.1
+pdfplumber==0.11.10
+python-docx==1.2.0
+peewee==4.3.0
+rapidocr-onnxruntime==1.4.4
+matplotlib==3.11.1
+opencv-python==5.0.0.93

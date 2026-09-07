@@ -2,6 +2,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QButtonGroup, QFrame, QLabel, QMessageBox, QProgressBar, QPushButton, QRadioButton, QTextEdit, QVBoxLayout, QWidget
 
 import src.models.revisao_service as revisao_svc
+from src.ui.components.statement import formatar_enunciado
 
 
 class RevisaoPage(QWidget):
@@ -67,7 +68,8 @@ class RevisaoPage(QWidget):
         kicker = QLabel((q.get("disciplina") or "REVISÃO").upper())
         kicker.setObjectName("review-kicker")
         self.conteudo_layout.addWidget(kicker)
-        enunciado = QTextEdit(q["enunciado"])
+        enunciado = QTextEdit()
+        enunciado.setPlainText(formatar_enunciado(q["enunciado"]))
         enunciado.setObjectName("review-statement")
         enunciado.setReadOnly(True)
         self.conteudo_layout.addWidget(enunciado)

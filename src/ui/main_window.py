@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget, QVBoxLayout, QWidget, QSizePolicy
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget, QVBoxLayout, QWidget, QSizePolicy, QMessageBox
 
 from src.ui.pages.dashboard import DashboardPage
 from src.ui.pages.execucao_prova import ExecucaoProvaPage
@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(200)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(18, 24, 18, 18)
         sidebar_layout.setSpacing(8)
@@ -37,7 +37,7 @@ class MainWindow(QMainWindow):
         self.menu = QListWidget()
         self.menu.setObjectName("main-menu")
         sidebar_layout.addWidget(self.menu)
-        footer = QLabel("ESTUDE • PRATIQUE • EVOLUA")
+        footer = QLabel("LOCAL · SEUS DADOS")
         footer.setObjectName("sidebar-footer")
         sidebar_layout.addWidget(footer)
 
@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
             "Questões": QuestoesPage(),
             "Importar": ImportacaoPage(),
             "Gerar Prova": GeradorProvaPage(),
-            "Provas / Modo Prova": ExecucaoProvaPage(),
+            "Modo prova": ExecucaoProvaPage(),
             "Estatísticas": EstatisticasPage(),
             "Revisão": RevisaoPage(),
         }
@@ -59,7 +59,21 @@ class MainWindow(QMainWindow):
             self.menu.addItem(nome)
             self.pages.addWidget(widget)
         self.menu.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.pages.currentChanged.connect(self.menu.setCurrentRow)
         self.menu.setCurrentRow(0)
         layout.addWidget(sidebar)
         layout.addWidget(self.pages)
         self.setCentralWidget(main_widget)
+
+    def closeEvent(self, event):
+        importacao = self.pages.widget(2)
+        if importacao.ocupada:
+            QMessageBox.information(self, "Leitura em andamento", "Aguarde o término da leitura antes de fechar o aplicativo.")
+            event.ignore()
+            return
+        if importacao.session.pendentes and QMessageBox.question(self, "Fechar sem salvar o lote?",
+                "Há questões em revisão que ainda não foram salvas. Deseja fechar e descartar esses rascunhos?",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            event.ignore()
+            return
+        super().closeEvent(event)

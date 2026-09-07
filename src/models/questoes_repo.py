@@ -6,8 +6,8 @@ import datetime
 from peewee import Case, JOIN, fn, prefetch
 
 from src.db.database import db, init_db
-from src.db.models import Alternativa, Prova, ProvaQuestao, Questao, Resposta, RevisaoEspacada, Tentativa
-from src.importador.validacao import gabarito_valido, normalizar_gabarito
+from src.db.models import Alternativa, Prova, ProvaQuestao, Questao, Resposta, RevisaoEspacada, Tentativa, ProgressoTentativa
+from src.importador.validacao import gabarito_valido, normalizar_gabarito, problemas_estrutura
 
 
 CAMPOS_QUESTAO = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario")
@@ -67,7 +67,8 @@ def atualizar_questao(q_id: int, dados: dict):
     with db.atomic():
         questao = Questao.get_by_id(q_id)
         for campo in CAMPOS_QUESTAO:
-            setattr(questao, campo, dados.get(campo))
+            if campo in dados:
+                setattr(questao, campo, dados[campo])
         questao.save()
         if questao.tipo == "multipla_escolha" and "alternativas" in dados:
             Alternativa.delete().where(Alternativa.questao == q_id).execute()
@@ -118,12 +119,7 @@ def listar_bancas() -> list[str]:
     return [row.banca for row in query]
 
 
-def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int) -> int:
-    init_db()
-    if quantidade <= 0:
-        return 0
-    # Questões anuladas continuam no histórico, mas não compõem novas provas:
-    # elas não são avaliáveis e poderiam gerar uma prova com denominador zero.
+def _questoes_elegiveis(filtros=None):
     query = Questao.select(Questao.id).where(
         (Questao.ativa == True)
         & Questao.gabarito.in_(["A", "B", "C", "D", "E", "Certo", "Errado"])
@@ -134,6 +130,32 @@ def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int
         query = query.where(Questao.tipo == filtros["tipo"])
     if filtros and filtros.get("topico"):
         query = query.where(Questao.topico == filtros["topico"])
+    # Verificar os registros antigos também: possuir gabarito não garante
+    # que alternativas e enunciado foram extraídos integralmente.
+    candidatos = list(Questao.select().where(Questao.id.in_(query)))
+    alternativas = {}
+    for a in Alternativa.select().where(Alternativa.questao.in_(query)):
+        alternativas.setdefault(a.questao_id, []).append({'letra': a.letra, 'texto': a.texto})
+    validos = []
+    for q in candidatos:
+        dados = {'enunciado': q.enunciado, 'tipo': q.tipo, 'gabarito': q.gabarito,
+                 'alternativas': alternativas.get(q.id, [])}
+        if not problemas_estrutura(dados):
+            validos.append(q.id)
+    query = query.where(Questao.id.in_(validos))
+    return query
+
+
+def contar_questoes_elegiveis(filtros=None):
+    init_db()
+    return _questoes_elegiveis(filtros).count()
+
+
+def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int) -> int:
+    init_db()
+    if quantidade <= 0:
+        return 0
+    query = _questoes_elegiveis(filtros)
     todas_questoes = [questao.id for questao in query]
     if not todas_questoes:
         return 0
@@ -165,7 +187,7 @@ def listar_provas(incluir_concluidas: bool = False) -> list[dict]:
             configuracao = json.loads(prova.filtros or "{}")
         except (TypeError, json.JSONDecodeError):
             configuracao = {}
-        provas.append({"id": prova.id, "nome": prova.nome, "criada_em": _legacy_value(prova.criada_em), "qtd_questoes": prova.qtd_questoes, "concluida": concluida, "tempo_limite_min": _tempo_limite_da_configuracao(configuracao)})
+        provas.append({"id": prova.id, "nome": prova.nome, "criada_em": _legacy_value(prova.criada_em), "qtd_questoes": prova.qtd_questoes, "concluida": concluida, "em_andamento": Tentativa.select().where((Tentativa.prova == prova.id) & Tentativa.finalizada_em.is_null(True)).exists(), "tempo_limite_min": _tempo_limite_da_configuracao(configuracao)})
     return provas
 
 
@@ -198,6 +220,28 @@ def iniciar_tentativa(prova_id: int) -> int:
     return Tentativa.create(prova=prova_id).id
 
 
+def salvar_progresso(tentativa_id, respostas, indice, tempo_seg):
+    init_db()
+    with db.atomic():
+        tentativa = Tentativa.get_by_id(tentativa_id)
+        if tentativa.finalizada_em is not None:
+            raise ValueError("Esta tentativa já foi finalizada.")
+        ids = {q.questao_id for q in ProvaQuestao.select().where(ProvaQuestao.prova == tentativa.prova_id)}
+        if set(respostas) - ids:
+            raise ValueError("Resposta não pertence à prova.")
+        ProgressoTentativa.insert(tentativa=tentativa_id, respostas=json.dumps(respostas),
+                                 indice=max(0, indice), tempo_seg=max(0, tempo_seg)).on_conflict_replace().execute()
+
+
+def obter_progresso(tentativa_id):
+    init_db()
+    progresso = ProgressoTentativa.get_or_none(ProgressoTentativa.tentativa == tentativa_id)
+    if progresso is None:
+        return {"respostas": {}, "indice": 0, "tempo_seg": 0}
+    return {"respostas": {int(k): v for k, v in json.loads(progresso.respostas).items()},
+            "indice": progresso.indice, "tempo_seg": progresso.tempo_seg}
+
+
 def finalizar_tentativa(tentativa_id: int, respostas_usuario: dict, tempo_gasto_seg: int) -> dict:
     init_db()
     total_acertos = 0
@@ -224,11 +268,12 @@ def finalizar_tentativa(tentativa_id: int, respostas_usuario: dict, tempo_gasto_
                 continue
             resposta_normalizada = normalizar_gabarito(resposta, questao.tipo)
             gabarito_normalizado = normalizar_gabarito(questao.gabarito, questao.tipo)
-            correta = resposta_normalizada == gabarito_normalizado
+            correta = gabarito_normalizado is not None and resposta_normalizada == gabarito_normalizado
             total_acertos += int(correta)
             if not correta:
                 detalhes_erradas.append({"id": q_id, "enunciado": questao.enunciado, "marcada": resposta, "correta": questao.gabarito})
             Resposta.create(tentativa=tentativa_id, questao=q_id, resposta_marcada=resposta_normalizada, correta=correta)
+        ProgressoTentativa.delete().where(ProgressoTentativa.tentativa == tentativa_id).execute()
         nota = (total_acertos / total_questoes * 100) if total_questoes else 0
         Tentativa.update(finalizada_em=datetime.datetime.now(), total_acertos=total_acertos, nota=nota, tempo_gasto_seg=tempo_gasto_seg).where(Tentativa.id == tentativa_id).execute()
     return {"acertos": total_acertos, "total": total_questoes, "nota": nota, "erradas": detalhes_erradas}

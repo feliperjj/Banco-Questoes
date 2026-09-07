@@ -172,7 +172,7 @@ class GeradorProvaPage(QWidget):
             filtros["topico"] = topico
         if self.tipo_input.currentData():
             filtros["tipo"] = self.tipo_input.currentData()
-        total = len(repo.buscar_questoes(filtros))
+        total = repo.contar_questoes_elegiveis(filtros)
         self.lbl_disponiveis.setText(f"{total} questão(ões) disponíveis")
         self.lbl_disponiveis.setProperty("empty", total == 0)
         self.lbl_disponiveis.style().unpolish(self.lbl_disponiveis)
@@ -190,7 +190,7 @@ class GeradorProvaPage(QWidget):
             quantidade.setTextAlignment(Qt.AlignCenter)
             self.tabela.setItem(row, 2, quantidade)
             concluida = bool(prova.get("concluida"))
-            status = QTableWidgetItem("Concluída" if concluida else "Pendente")
+            status = QTableWidgetItem("Concluída" if concluida else ("Em andamento" if prova.get("em_andamento") else "Pendente"))
             status.setTextAlignment(Qt.AlignCenter)
             status.setData(Qt.UserRole, concluida)
             self.tabela.setItem(row, 3, status)
@@ -201,7 +201,7 @@ class GeradorProvaPage(QWidget):
                 self.tabela.setCellWidget(row, 4, label)
                 continue
 
-            botao = QPushButton("Iniciar prova")
+            botao = QPushButton("Retomar prova" if prova.get("em_andamento") else "Iniciar prova")
             botao.setObjectName("table-action-button")
             botao.setMinimumWidth(132)
             botao.setMaximumWidth(154)

@@ -99,4 +99,14 @@ class RevisaoEspacada(BaseModel):
         table_name = "revisao_espacada"
 
 
-ALL_MODELS = [Questao, Alternativa, Prova, ProvaQuestao, Tentativa, Resposta, RevisaoEspacada]
+class ProgressoTentativa(BaseModel):
+    tentativa = ForeignKeyField(Tentativa, primary_key=True, backref="progresso")
+    respostas = TextField(default="{}")
+    indice = IntegerField(default=0)
+    tempo_seg = IntegerField(default=0)
+
+    class Meta:
+        table_name = "progresso_tentativas"
+
+
+ALL_MODELS = [Questao, Alternativa, Prova, ProvaQuestao, Tentativa, Resposta, RevisaoEspacada, ProgressoTentativa]

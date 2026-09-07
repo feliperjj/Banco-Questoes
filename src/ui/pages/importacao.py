@@ -1,307 +1,443 @@
+"""Fluxo de importação: arquivo, associação e revisão com rascunhos estáveis."""
 import logging
-import os
-import re
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
-from PySide6.QtWidgets import QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QComboBox, QHeaderView, QLineEdit, QMessageBox, QProgressDialog, QScrollArea, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Slot
+from PySide6.QtWidgets import (
+    QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton,
+    QComboBox, QScrollArea, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+)
 
-import src.models.questoes_repo as repo
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
-from src.importador.lote import aplicar_classificacao_as_questoes, aplicar_gabarito_as_questoes, parsear_gabarito_em_lote
-from src.importador.parser import parsear_questoes
-from src.importador.validacao import associar_gabaritos
+from src.importador.lote import parsear_gabarito_em_lote
+from src.importador.servico import importar_caderno
+from src.models import questoes_repo as repo
+from src.models.importacao_session import EstadoImportacao, ImportacaoSession, validar_questao
+from src.ui.background import BackgroundTask
+from src.ui.components.question_editor import QuestionEditor
 
 logger = logging.getLogger(__name__)
 
 
-class GabaritoWorker(QObject):
-    # O resultado é um dicionário Python. object evita que o Shiboken tente
-    # convertê-lo para um tipo C++ ao atravessar a thread.
-    concluido = Signal(object)
-    falhou = Signal(str)
-
-    def __init__(self, caminho, codigo, cargo=None, numeros_esperados=None):
-        super().__init__(); self.caminho = caminho; self.codigo = codigo; self.cargo = cargo; self.numeros_esperados = numeros_esperados
-
-    @Slot()
-    def executar(self):
-        try:
-            self.concluido.emit(extrair_gabaritos_pdf(
-                self.caminho, self.codigo, self.cargo, numeros_esperados=self.numeros_esperados,
-            ))
-        except Exception as exc:
-            logger.exception("Erro ao extrair gabarito em segundo plano")
-            self.falhou.emit(str(exc))
-
-
-class QuestoesWorker(QObject):
-    concluido = Signal(object)
-    falhou = Signal(str)
-
-    def __init__(self, caminho):
-        super().__init__(); self.caminho = caminho
-
-    @Slot()
-    def executar(self):
-        try:
-            self.concluido.emit(parsear_questoes(extrair_texto(self.caminho), self.caminho))
-        except Exception as exc:
-            logger.exception("Erro ao extrair questões em segundo plano")
-            self.falhou.emit(str(exc))
+def _texto(texto, nome="section-hint"):
+    label = QLabel(texto)
+    label.setObjectName(nome)
+    label.setWordWrap(True)
+    label.setMinimumWidth(0)
+    label.setTextFormat(Qt.PlainText)
+    return label
 
 
 class ImportacaoPage(QWidget):
     def __init__(self):
-        super().__init__(); layout = QVBoxLayout(self); layout.setContentsMargins(30, 26, 30, 26); layout.setSpacing(10)
-        titulo = QLabel("Importar questões"); titulo.setObjectName("page-title"); layout.addWidget(titulo)
-        subtitulo = QLabel("Extraia questões, associe gabaritos e revise os dados antes de salvar."); subtitulo.setObjectName("page-subtitle"); layout.addWidget(subtitulo)
-        top = QHBoxLayout(); top.setSpacing(8)
-        self.lbl_arquivo = QLabel("Nenhum arquivo selecionado"); self.btn_selecionar_questoes = QPushButton("Selecionar Questões (PDF/DOCX)"); self.btn_selecionar_questoes.clicked.connect(self.selecionar_arquivo)
-        self.lbl_arquivo.setObjectName("file-status"); self.lbl_arquivo.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.btn_selecionar_gabarito = QPushButton("Selecionar Gabarito (PDF)"); self.btn_selecionar_gabarito.setObjectName("secondary-button"); self.btn_selecionar_gabarito.clicked.connect(self.selecionar_gabarito)
-        top.addWidget(self.btn_selecionar_questoes); top.addWidget(self.btn_selecionar_gabarito); top.addWidget(self.lbl_arquivo); top.addStretch(); layout.addLayout(top)
-        seletor_gabarito = QHBoxLayout(); self.cargo_gabarito_input = QLineEdit(); self.cargo_gabarito_input.setPlaceholderText("Cargo exato no gabarito (opcional)"); self.codigo_gabarito_input = QLineEdit(); self.codigo_gabarito_input.setPlaceholderText("Código/prova exato (opcional)"); seletor_gabarito.addWidget(self.cargo_gabarito_input); seletor_gabarito.addWidget(self.codigo_gabarito_input); layout.addLayout(seletor_gabarito)
-        gabarito_lote = QHBoxLayout(); self.gabarito_lote_input = QLineEdit(); self.gabarito_lote_input.setPlaceholderText("Cole o gabarito inteiro: A D B C ..."); aplicar_gabarito = QPushButton("Aplicar Gabarito em Lote"); aplicar_gabarito.clicked.connect(self.aplicar_gabarito_lote); gabarito_lote.addWidget(self.gabarito_lote_input); gabarito_lote.addWidget(aplicar_gabarito); layout.addLayout(gabarito_lote)
-        classificacao = QGroupBox("Classificar questões em lote")
-        classificacao_layout = QHBoxLayout(classificacao)
-        self.classificacao_inicio = QSpinBox(); self.classificacao_inicio.setMinimum(1); self.classificacao_inicio.setPrefix("Da questão ")
-        self.classificacao_fim = QSpinBox(); self.classificacao_fim.setMinimum(1); self.classificacao_fim.setPrefix("até ")
-        self.disciplina_lote_input = QComboBox(); self.disciplina_lote_input.setEditable(True); self.disciplina_lote_input.addItems(["Língua Portuguesa", "Matemática", "Raciocínio Lógico", "Informática", "Conhecimentos Específicos"])
-        self.categoria_lote_input = QLineEdit(); self.categoria_lote_input.setPlaceholderText("Categoria / assunto")
-        aplicar_classificacao = QPushButton("Aplicar ao bloco"); aplicar_classificacao.clicked.connect(self.aplicar_classificacao_lote)
-        classificacao_layout.addWidget(self.classificacao_inicio); classificacao_layout.addWidget(self.classificacao_fim); classificacao_layout.addWidget(self.disciplina_lote_input); classificacao_layout.addWidget(self.categoria_lote_input); classificacao_layout.addWidget(aplicar_classificacao); layout.addWidget(classificacao)
-        revisao_titulo = QLabel("Revisão das questões extraídas"); revisao_titulo.setObjectName("section-title"); layout.addWidget(revisao_titulo)
-        main = QHBoxLayout(); main.setSpacing(12); self.lista_questoes = QListWidget(); self.lista_questoes.setObjectName("import-list"); self.lista_questoes.setMinimumWidth(230); self.lista_questoes.setMaximumWidth(330); self.lista_questoes.itemClicked.connect(self.carregar_edicao); main.addWidget(self.lista_questoes, 1)
-        self.painel_edicao = QWidget(); self.painel_edicao.setMinimumWidth(0); self.painel_edicao.setDisabled(True); form = QFormLayout(self.painel_edicao)
-        form.setContentsMargins(16, 14, 16, 16); form.setSpacing(7); form.setRowWrapPolicy(QFormLayout.WrapAllRows); form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.lbl_confianca = QLabel(); form.addRow("Confiança da Extração:", self.lbl_confianca)
-        self.enunciado_input = QTextEdit(); self.enunciado_input.setMinimumHeight(100); form.addRow("Enunciado:", self.enunciado_input)
-        self.tipo_combo = QComboBox(); self.tipo_combo.addItems(["multipla_escolha", "certo_errado"]); form.addRow("Tipo:", self.tipo_combo)
-        self.alternativas_tabela = QTableWidget(5, 2)
-        self.alternativas_tabela.setHorizontalHeaderLabels(["Letra", "Texto da opção"])
-        self.alternativas_tabela.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.alternativas_tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.alternativas_tabela.verticalHeader().setVisible(False)
-        for linha, letra in enumerate("ABCDE"):
-            self.alternativas_tabela.setItem(linha, 0, QTableWidgetItem(letra))
-        form.addRow("Opções (se houver):", self.alternativas_tabela)
-        self.disciplina_input = QComboBox(); self.disciplina_input.setEditable(True); form.addRow("Disciplina:", self.disciplina_input)
-        self.topico_input = QLineEdit(); self.topico_input.setPlaceholderText("Ex.: Redes, Gramática, Banco de Dados..."); form.addRow("Categoria / Assunto:", self.topico_input)
-        self.banca_input = QComboBox(); self.banca_input.setEditable(True); form.addRow("Banca:", self.banca_input)
-        self.ano_input = QLineEdit(); form.addRow("Ano:", self.ano_input)
-        self.gabarito_input = QComboBox(); self.gabarito_input.addItems(["A", "B", "C", "D", "E", "Certo", "Errado", "Anulada"]); form.addRow("Gabarito (Obrigatório):", self.gabarito_input)
-        salvar = QPushButton("Salvar Questão Revisada"); salvar.clicked.connect(self.salvar_questao); form.addRow(salvar)
-        salvar_todas = QPushButton("Salvar Todas as Questões"); salvar_todas.clicked.connect(self.salvar_todas); form.addRow(salvar_todas)
-        scroll = QScrollArea(); scroll.setObjectName("import-editor-scroll"); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(self.painel_edicao); main.addWidget(scroll, 3); layout.addLayout(main, 1)
-        self.questoes_extraidas = []; self.item_atual = None; self.caminho_questoes = ""; self.caminho_questoes_pendente = ""; self.gabarito_thread = None; self.gabarito_worker = None; self.gabarito_progresso = None; self.questoes_thread = None; self.questoes_worker = None; self.questoes_progresso = None
+        super().__init__()
+        self.setObjectName("import-page")
+        self.session = ImportacaoSession()
+        self.current_index = None
+        self.caminho_questoes_pendente = ""
+        self.caminho_gabarito = ""
+        self.operation = None
+        self.task = BackgroundTask(self)
+        self.task.result.connect(self._resultado)
+        self.task.error.connect(self._falha)
+        self.task.idle.connect(self._task_idle)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(12)
+        layout.addWidget(_texto("Seu próximo conjunto de estudos", "section-kicker"))
+        layout.addWidget(_texto("Importar questões", "page-title"))
+        self.resumo = _texto("Comece com um PDF ou DOCX. Revise antes de adicionar ao acervo.", "page-subtitle")
+        layout.addWidget(self.resumo)
+        self.steps = QTabWidget()
+        self.steps.setObjectName("import-steps")
+        layout.addWidget(self.steps, 1)
+        self._arquivo_step()
+        self._gabarito_step()
+        self._revisao_step()
+        self.feedback = _texto("Nenhum dado será salvo antes da sua revisão.", "import-feedback")
+        layout.addWidget(self.feedback)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setFixedHeight(5)
+        self.progress.hide()
+        layout.addWidget(self.progress)
+        footer = QHBoxLayout()
+        self.btn_anterior = QPushButton("Voltar")
+        self.btn_anterior.setObjectName("secondary-button")
+        self.btn_anterior.clicked.connect(lambda: self.steps.setCurrentIndex(self.steps.currentIndex() - 1))
+        self.btn_salvar_questao = QPushButton("Salvar esta")
+        self.btn_salvar_questao.setObjectName("secondary-button")
+        self.btn_salvar_questao.clicked.connect(self.salvar_questao)
+        self.btn_salvar_todas = QPushButton("Salvar pendentes")
+        self.btn_salvar_todas.clicked.connect(self.salvar_todas)
+        self.btn_proxima = QPushButton("Continuar")
+        self.btn_proxima.clicked.connect(lambda: self.steps.setCurrentIndex(self.steps.currentIndex() + 1))
+        footer.addWidget(self.btn_anterior)
+        footer.addStretch()
+        footer.addWidget(self.btn_salvar_questao)
+        footer.addWidget(self.btn_salvar_todas)
+        footer.addWidget(self.btn_proxima)
+        layout.addLayout(footer)
+        self.steps.currentChanged.connect(self._sync)
+        self._sync()
+
+    @property
+    def questoes_extraidas(self):
+        return self.session.questoes
+
+    @property
+    def caminho_questoes(self):
+        return self.session.caminho
+
+    @property
+    def ocupada(self):
+        return self.task.running or self.session.estado in {EstadoImportacao.LENDO, EstadoImportacao.SALVANDO}
+
+    def _scroll_step(self, titulo):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setObjectName("import-step-scroll")
+        content = QWidget()
+        content.setMinimumWidth(0)
+        box = QVBoxLayout(content)
+        box.setContentsMargins(22, 22, 22, 22)
+        box.setSpacing(16)
+        scroll.setWidget(content)
+        self.steps.addTab(scroll, titulo)
+        return box
+
+    def _arquivo_step(self):
+        box = self._scroll_step("1  Arquivo")
+        box.addWidget(_texto("Transforme uma prova em questões para estudar.", "import-hero-title"))
+        box.addWidget(_texto("Escolha o caderno de questões. Na próxima etapa, associe um gabarito ou siga direto para a revisão."))
+        self.btn_selecionar_questoes = QPushButton("Escolher PDF ou DOCX")
+        self.btn_selecionar_questoes.setMinimumHeight(44)
+        self.btn_selecionar_questoes.clicked.connect(self.selecionar_arquivo)
+        box.addWidget(self.btn_selecionar_questoes, alignment=Qt.AlignLeft)
+        self.lbl_arquivo = _texto("Nenhum arquivo selecionado", "file-status")
+        box.addWidget(self.lbl_arquivo)
+        box.addWidget(_texto("01  Escolha o arquivo\n\n02  Associe as respostas por cargo e tipo\n\n03  Confira as pendências e salve", "import-guide"))
+        box.addStretch()
+
+    def _gabarito_step(self):
+        box = self._scroll_step("2  Gabarito")
+        box.addWidget(_texto("Encontre a resposta certa para cada questão.", "section-title"))
+        box.addWidget(_texto("Para PDFs com vários cargos, informe o nome exato e o tipo de prova. Essa etapa é opcional: questões sem gabarito podem ser revisadas depois."))
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.WrapAllRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.cargo_gabarito_input = QLineEdit()
+        self.cargo_gabarito_input.setPlaceholderText("Ex.: Analista de Sistemas")
+        self.codigo_gabarito_input = QLineEdit()
+        self.codigo_gabarito_input.setPlaceholderText("Ex.: T1; ou códigos Cebraspe separados por ;")
+        self.codigo_gabarito_input.setToolTip("Para reunir os blocos básico e específico, informe os dois códigos exatos separados por ponto e vírgula.")
+        form.addRow("Cargo no gabarito", self.cargo_gabarito_input)
+        form.addRow("Tipo ou código da prova", self.codigo_gabarito_input)
+        box.addLayout(form)
+        self.btn_selecionar_gabarito = QPushButton("Ler gabarito em PDF")
+        self.btn_selecionar_gabarito.clicked.connect(self.selecionar_gabarito)
+        box.addWidget(self.btn_selecionar_gabarito, alignment=Qt.AlignLeft)
+        box.addWidget(_texto("Ou cole a sequência completa", "section-title"))
+        box.addWidget(_texto("Uma resposta por número oficial, da questão 1 até a última. Para cadernos com lacunas ou numeração repetida, use o PDF ou revise individualmente."))
+        self.gabarito_lote_input = QLineEdit()
+        self.gabarito_lote_input.setPlaceholderText("A B C D E … ou CERTO ERRADO …")
+        box.addWidget(self.gabarito_lote_input)
+        self.btn_aplicar_gabarito = QPushButton("Aplicar sequência")
+        self.btn_aplicar_gabarito.setObjectName("secondary-button")
+        self.btn_aplicar_gabarito.clicked.connect(self.aplicar_gabarito_lote)
+        box.addWidget(self.btn_aplicar_gabarito, alignment=Qt.AlignLeft)
+        box.addStretch()
+
+    def _revisao_step(self):
+        page = QWidget()
+        box = QVBoxLayout(page)
+        box.setContentsMargins(12, 12, 12, 12)
+        box.setSpacing(8)
+        self.classificar_btn = QPushButton("Classificar intervalo…")
+        self.classificar_btn.setObjectName("secondary-button")
+        self.classificar_btn.clicked.connect(self._classificar_dialog)
+        box.addWidget(self.classificar_btn, alignment=Qt.AlignRight)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        left = QWidget()
+        left.setMinimumWidth(165)
+        left_box = QVBoxLayout(left)
+        left_box.setContentsMargins(0, 0, 0, 0)
+        self.filtro = QComboBox()
+        for nome, valor in [("Todas as questões", "todas"), ("Não salvas", "pendentes"), ("Sem gabarito", "sem_gabarito"), ("Salvas", "salvas")]:
+            self.filtro.addItem(nome, valor)
+        self.filtro.currentIndexChanged.connect(self._refresh_list)
+        left_box.addWidget(self.filtro)
+        self.lista_questoes = QListWidget()
+        self.lista_questoes.setObjectName("import-review-list")
+        self.lista_questoes.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lista_questoes.currentItemChanged.connect(self.carregar_edicao)
+        left_box.addWidget(self.lista_questoes, 1)
+        self.splitter.addWidget(left)
+        right = QWidget()
+        right.setMinimumWidth(250)
+        right_box = QVBoxLayout(right)
+        right_box.setContentsMargins(0, 0, 0, 0)
+        self.lbl_confianca = _texto("Selecione uma questão para revisar.", "section-hint")
+        right_box.addWidget(self.lbl_confianca)
+        self.editor = QuestionEditor()
+        self.painel_edicao = self.editor
+        self.editor.changed.connect(self._editar_rascunho)
+        right_box.addWidget(self.editor, 1)
+        self.splitter.addWidget(right)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([210, 540])
+        box.addWidget(self.splitter, 1)
+        self.steps.addTab(page, "3  Revisão")
+
+    def _sync(self, *args):
+        busy = self.ocupada
+        tem = bool(self.session.questoes)
+        pendentes = self.session.pendentes
+        for index in (1, 2):
+            self.steps.setTabEnabled(index, tem)
+        self.steps.tabBar().setEnabled(not busy)
+        self.filtro.setEnabled(not busy)
+        self.lista_questoes.setEnabled(not busy)
+        self.btn_selecionar_questoes.setEnabled(not busy)
+        self.btn_selecionar_gabarito.setEnabled(not busy and bool(pendentes))
+        self.btn_aplicar_gabarito.setEnabled(not busy and bool(pendentes))
+        self.classificar_btn.setEnabled(not busy and bool(pendentes))
+        self.progress.setVisible(busy)
+        step = self.steps.currentIndex()
+        self.btn_anterior.setEnabled(step > 0 and not busy)
+        self.btn_proxima.setVisible(step < 2)
+        self.btn_proxima.setEnabled(tem and not busy)
+        self.btn_proxima.setText("Revisar questões" if step == 1 else "Continuar")
+        self.btn_salvar_todas.setVisible(step == 2)
+        self.btn_salvar_questao.setVisible(step == 2)
+        self.btn_salvar_todas.setEnabled(bool(pendentes) and not busy)
+        self.btn_salvar_todas.setText(f"Salvar pendentes ({len(pendentes)})")
+        editavel = self.current_index in pendentes and not busy
+        self.editor.setEnabled(editavel)
+        self.btn_salvar_questao.setEnabled(editavel)
+        if tem:
+            sem = sum(not self.session.questoes[i].get("gabarito") for i in pendentes)
+            self.resumo.setText(f"{len(self.session.questoes)} questões   ·   {len(self.session.salvas)} salvas   ·   {sem} pendentes sem gabarito")
+
+    def _informar(self, texto, erro=False):
+        self.feedback.setText(texto)
+        self.feedback.setProperty("error", erro)
+        self.feedback.style().unpolish(self.feedback)
+        self.feedback.style().polish(self.feedback)
 
     def selecionar_arquivo(self):
-        caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar Prova", "", "Arquivos (*.pdf *.docx)")
-        if not caminho: return
+        if self.ocupada:
+            return
+        caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar caderno", "", "Provas (*.pdf *.docx)")
+        if not caminho:
+            return
+        if self.session.pendentes and QMessageBox.question(self, "Substituir a revisão?", "O lote atual contém questões não salvas. Deseja substituí-lo?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
         self.caminho_questoes_pendente = caminho
-        self.btn_selecionar_questoes.setEnabled(False); self.btn_selecionar_gabarito.setEnabled(False)
-        self.questoes_progresso = QProgressDialog("Lendo questões...", None, 0, 0, self); self.questoes_progresso.setWindowTitle("Importação"); self.questoes_progresso.setWindowModality(Qt.WindowModal); self.questoes_progresso.setMinimumDuration(0); self.questoes_progresso.show()
-        self.questoes_thread = QThread(self); self.questoes_worker = QuestoesWorker(caminho); self.questoes_worker.moveToThread(self.questoes_thread)
-        self.questoes_thread.started.connect(self.questoes_worker.executar); self.questoes_worker.concluido.connect(self._finalizar_importacao_questoes); self.questoes_worker.falhou.connect(self._falha_importacao_questoes)
-        self.questoes_worker.concluido.connect(self.questoes_thread.quit); self.questoes_worker.falhou.connect(self.questoes_thread.quit); self.questoes_thread.finished.connect(self.questoes_worker.deleteLater); self.questoes_thread.finished.connect(self.questoes_thread.deleteLater); self.questoes_thread.start()
+        self.operation = "questoes"
+        self._start(lambda: importar_caderno(caminho), "Lendo o caderno. Você pode continuar usando as outras telas.")
+
+    def selecionar_gabarito(self):
+        if self.ocupada or not self.session.pendentes:
+            return
+        caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar gabarito", "", "Gabaritos (*.pdf)")
+        if not caminho:
+            return
+        cargo = self.cargo_gabarito_input.text().strip() or None
+        codigo = self.codigo_gabarito_input.text().strip() or None
+        numeros = {int(q.get("numero", i + 1)) for i, q in enumerate(self.session.questoes)}
+        self.caminho_gabarito = caminho
+        self.operation = "gabarito"
+        self._start(lambda: extrair_gabaritos_pdf(caminho, codigo, cargo, numeros_esperados=numeros), "Lendo o gabarito. PDFs escaneados podem levar mais tempo.")
+
+    def _start(self, function, mensagem):
+        self.session.estado = EstadoImportacao.LENDO
+        self._informar(mensagem)
+        self.task.start(function)
+        self._sync()
+
+    @Slot()
+    def _task_idle(self):
+        self._sync()
+        if self.operation == "questoes" and self.session.questoes:
+            self.steps.setCurrentIndex(1)
+        self.operation = None
+
+    @Slot(object)
+    def _resultado(self, resultado):
+        if self.operation == "questoes":
+            self._finalizar_importacao_questoes(resultado)
+        else:
+            self._finalizar_importacao_gabarito(resultado)
+
+    @Slot(str)
+    def _falha(self, erro):
+        self.caminho_questoes_pendente = ""
+        self.session.restaurar_estado()
+        self._informar(f"Não foi possível ler o arquivo. A revisão anterior foi preservada. {erro}", True)
+        self._sync()
 
     @Slot(object)
     def _finalizar_importacao_questoes(self, questoes):
-        if self.questoes_progresso: self.questoes_progresso.close(); self.questoes_progresso.deleteLater(); self.questoes_progresso = None
         caminho = self.caminho_questoes_pendente
-        self.caminho_questoes = caminho
         self.caminho_questoes_pendente = ""
-        self.lbl_arquivo.setText(os.path.basename(caminho))
-        self.btn_selecionar_questoes.setEnabled(True); self.btn_selecionar_gabarito.setEnabled(True)
-        self.lista_questoes.clear(); self.questoes_extraidas = questoes
-        try:
-            self.classificacao_inicio.setMaximum(max(1, len(self.questoes_extraidas)))
-            self.classificacao_fim.setMaximum(max(1, len(self.questoes_extraidas)))
-            self.classificacao_fim.setValue(max(1, len(self.questoes_extraidas)))
-            if self.questoes_extraidas:
-                primeira = self.questoes_extraidas[0]
-                self.disciplina_input.setCurrentText(primeira.get("disciplina", ""))
-                self.topico_input.setText(primeira.get("topico", ""))
-                self.banca_input.setCurrentText(primeira.get("banca", ""))
-                if primeira.get("ano"):
-                    self.ano_input.setText(str(primeira["ano"]))
-            logger.info("Arquivo importado: %s (%s questões)", caminho, len(self.questoes_extraidas))
-            if not self.questoes_extraidas:
-                QMessageBox.warning(self, "Aviso", "Nenhuma questão detectada pelo parser heurístico."); return
-            for i, q in enumerate(self.questoes_extraidas):
-                gabarito = f" - {q['gabarito']}" if q.get("gabarito") else ""
-                numero = int(q.get("numero", i + 1))
-                item = QListWidgetItem(f"Q{numero} [{q['confianca'].upper()}]{gabarito} - {' '.join(q['enunciado'].split()[:6])}..."); item.setData(Qt.UserRole, i); self.lista_questoes.addItem(item)
-        except Exception:
-            logger.exception("Erro ao processar arquivo %s", caminho)
-            QMessageBox.critical(self, "Erro", "Erro ao processar arquivo. Consulte data/app.log para detalhes.")
-
-    @Slot(str)
-    def _falha_importacao_questoes(self, erro):
-        if self.questoes_progresso: self.questoes_progresso.close(); self.questoes_progresso.deleteLater(); self.questoes_progresso = None
-        self.caminho_questoes_pendente = ""
-        self.btn_selecionar_questoes.setEnabled(True); self.btn_selecionar_gabarito.setEnabled(True)
-        QMessageBox.critical(self, "Erro", f"Não foi possível processar o arquivo.\n\n{erro}")
-
-    def selecionar_gabarito(self):
-        caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar Gabarito", "", "Arquivos (*.pdf)")
-        if not caminho:
-            return
-        if not self.questoes_extraidas:
-            QMessageBox.warning(self, "Aviso", "Selecione primeiro o PDF das questões.")
-            return
-        nome_questoes = os.path.basename(self.caminho_questoes).lower()
-        codigo = re.search(r"(dpf\d+[_-]\d+)", nome_questoes, re.IGNORECASE)
-        # Sem código explícito no nome não escolha um cargo por aproximação:
-        # PDFs multiprovas precisam de seleção inequívoca ou revisão manual.
-        codigo_cargo = self.codigo_gabarito_input.text().strip() or (codigo.group(1) if codigo else None)
-        cargo = self.cargo_gabarito_input.text().strip() or None
-        self.gabarito_progresso = QProgressDialog("Lendo o gabarito...", None, 0, 0, self)
-        self.gabarito_progresso.setWindowTitle("Importação do gabarito")
-        self.gabarito_progresso.setWindowModality(Qt.WindowModal)
-        self.gabarito_progresso.setMinimumDuration(0)
-        self.gabarito_progresso.show()
-        self.gabarito_thread = QThread(self)
-        self.caminho_gabarito = caminho
-        numeros_esperados = {
-            int(q.get("numero", indice)) for indice, q in enumerate(self.questoes_extraidas, 1)
-        }
-        self.gabarito_worker = GabaritoWorker(caminho, codigo_cargo, cargo, numeros_esperados)
-        self.gabarito_worker.moveToThread(self.gabarito_thread)
-        self.gabarito_thread.started.connect(self.gabarito_worker.executar)
-        self.gabarito_worker.concluido.connect(self._finalizar_importacao_gabarito)
-        self.gabarito_worker.falhou.connect(self._falha_importacao_gabarito)
-        self.gabarito_worker.concluido.connect(self.gabarito_thread.quit)
-        self.gabarito_worker.falhou.connect(self.gabarito_thread.quit)
-        self.gabarito_thread.finished.connect(self.gabarito_worker.deleteLater)
-        self.gabarito_thread.finished.connect(self.gabarito_thread.deleteLater)
-        self.gabarito_thread.start()
+        if not questoes and self.session.questoes:
+            self.session.restaurar_estado()
+            self._informar("Nenhuma questão foi reconhecida. A revisão anterior foi preservada; tente outro arquivo.", True)
+        else:
+            self.session.carregar(questoes, caminho)
+            self.current_index = None
+            self.lbl_arquivo.setText(Path(caminho).name)
+            self.lbl_arquivo.setToolTip(caminho)
+            self._refresh_list()
+            perfis = sorted({q.get("perfil_importacao", "não informado") for q in questoes})
+            avisos = sorted(set(getattr(questoes, "avisos", ())) | {q["aviso_importacao"] for q in questoes if q.get("aviso_importacao")})
+            self.lbl_arquivo.setToolTip(caminho + "\nPerfis: " + ", ".join(perfis))
+            self._informar("Caderno carregado. Associe um gabarito ou siga para a revisão." if questoes else "Nenhuma questão reconhecida. Tente outro PDF ou DOCX.", not bool(questoes))
+            if avisos:
+                self._informar(" ".join(avisos), True)
+        self._sync()
+        # Durante uma tarefa real os controles são liberados apenas em idle.
 
     @Slot(object)
     def _finalizar_importacao_gabarito(self, gabaritos):
-        if self.gabarito_progresso:
-            self.gabarito_progresso.close(); self.gabarito_progresso.deleteLater(); self.gabarito_progresso = None
+        self.session.restaurar_estado()
         if not gabaritos:
-            QMessageBox.warning(self, "Gabarito escaneado", "Este PDF não possui texto selecionável. Cole a sequência de respostas no campo de gabarito em lote.")
-            return
-        associacao = associar_gabaritos(self.questoes_extraidas, gabaritos)
-        for linha in range(self.lista_questoes.count()):
-            item = self.lista_questoes.item(linha)
-            indice = item.data(Qt.UserRole)
-            q = self.questoes_extraidas[indice]
-            numero = int(q.get("numero", indice + 1))
-            if q.get("gabarito"):
-                item.setText(f"Q{numero} [{q['confianca'].upper()}] - {q['gabarito']} - {' '.join(q['enunciado'].split()[:6])}...")
-        self.lbl_arquivo.setText(f"{self.lbl_arquivo.text()} | gabarito: {os.path.basename(self.caminho_gabarito)}")
-        if self.item_atual:
-            self.carregar_edicao(self.item_atual)
-        mensagem = f"Extraídos: {associacao['extraidos']} | vinculados: {associacao['vinculados']} | faltantes: {len(associacao['faltantes'])} | extras: {len(associacao['extras'])} | duplicados: {len(associacao['duplicados'])}."
-        if associacao["revisao_manual"]: mensagem += " Revisão manual necessária."
-        QMessageBox.information(self, "OCR concluído", mensagem)
-
-    @Slot(str)
-    def _falha_importacao_gabarito(self, erro):
-        if self.gabarito_progresso:
-            self.gabarito_progresso.close(); self.gabarito_progresso.deleteLater(); self.gabarito_progresso = None
-        QMessageBox.critical(self, "Erro no OCR", f"Não foi possível ler o gabarito.\n\n{erro}")
+            self._informar(" ".join(getattr(gabaritos, "avisos", ())) or "Nenhuma resposta reconhecida para a seleção. Confira cargo/tipo, cole a sequência ou revise individualmente.", True)
+        else:
+            resultado = self.session.associar(gabaritos)
+            avisos_fonte = getattr(gabaritos, "avisos", [])
+            self._informar(f"{resultado['extraidos']} respostas lidas. Pendências: {len(resultado['faltantes'])} números ausentes, {len(resultado['duplicados'])} duplicados e {len(resultado['conflitos'])} conflitos.")
+            if avisos_fonte:
+                self._informar(" ".join(avisos_fonte), True)
+            self._refresh_list()
+        self._sync()
 
     def aplicar_gabarito_lote(self):
-        if not self.questoes_extraidas:
-            QMessageBox.warning(self, "Aviso", "Selecione primeiro o PDF das questões.")
+        if self.ocupada or not self.session.pendentes:
             return
         tokens = parsear_gabarito_em_lote(self.gabarito_lote_input.text())
-        if len(tokens) != len(self.questoes_extraidas):
-            QMessageBox.warning(self, "Quantidade diferente", f"Foram encontradas {len(tokens)} respostas para {len(self.questoes_extraidas)} questões.")
+        numeros = [int(q.get("numero", i + 1)) for i, q in enumerate(self.session.questoes)]
+        if len(tokens) != len(numeros) or sorted(numeros) != list(range(1, len(tokens) + 1)):
+            self._informar("A sequência precisa cobrir os números oficiais de 1 até o final, sem lacunas ou duplicidades. Use o PDF ou revise individualmente.", True)
             return
-        aplicar_gabarito_as_questoes(self.questoes_extraidas, tokens)
-        for linha in range(self.lista_questoes.count()):
-            item = self.lista_questoes.item(linha)
-            indice = item.data(Qt.UserRole)
-            numero = int(self.questoes_extraidas[indice].get("numero", indice + 1))
-            q = self.questoes_extraidas[indice]
-            item.setText(f"Q{numero} [{q['confianca'].upper()}] - {q['gabarito']} - {' '.join(q['enunciado'].split()[:6])}...")
-        if self.item_atual:
-            self.carregar_edicao(self.item_atual)
-        QMessageBox.information(self, "Sucesso", f"{len(tokens)} gabaritos aplicados em lote.")
+        self._finalizar_importacao_gabarito(dict(enumerate(tokens, 1)))
 
-    def aplicar_classificacao_lote(self):
-        if not self.questoes_extraidas:
-            QMessageBox.warning(self, "Aviso", "Selecione primeiro o PDF das questões.")
-            return
-        inicio = self.classificacao_inicio.value()
-        fim = self.classificacao_fim.value()
-        disciplina = self.disciplina_lote_input.currentText().strip()
-        categoria = self.categoria_lote_input.text().strip()
-        if inicio > fim:
-            QMessageBox.warning(self, "Faixa inválida", "A questão inicial não pode ser maior que a final.")
-            return
-        if not disciplina:
-            QMessageBox.warning(self, "Disciplina obrigatória", "Informe a disciplina do bloco.")
-            return
-        quantidade = aplicar_classificacao_as_questoes(self.questoes_extraidas, inicio, fim, disciplina, categoria)
-        for numero in range(inicio, min(fim, len(self.questoes_extraidas)) + 1):
-            questao = self.questoes_extraidas[numero - 1]
-            item = self.lista_questoes.item(numero - 1)
+    def _refresh_list(self, *args):
+        previous = self.current_index
+        self.lista_questoes.blockSignals(True)
+        self.lista_questoes.clear()
+        selected = None
+        filtro = self.filtro.currentData()
+        for i, q in enumerate(self.session.questoes):
+            saved = i in self.session.salvas
+            if (filtro == "pendentes" and saved) or (filtro == "salvas" and not saved) or (filtro == "sem_gabarito" and (q.get("gabarito") or saved)):
+                continue
+            item = QListWidgetItem(self._item_text(i))
+            item.setData(Qt.UserRole, i)
+            item.setToolTip("\n\n".join(filter(None, [q.get("aviso_importacao"), q.get("enunciado", "")])))
+            self.lista_questoes.addItem(item)
+            if i == previous:
+                selected = item
+        if selected is None and self.lista_questoes.count():
+            selected = self.lista_questoes.item(0)
+        self.lista_questoes.setCurrentItem(selected)
+        self.lista_questoes.blockSignals(False)
+        self.carregar_edicao(selected)
+
+    def _item_text(self, indice):
+        q = self.session.questoes[indice]
+        status = "Salva" if indice in self.session.salvas else (q.get("gabarito") or "Sem gabarito")
+        resumo = " ".join(q.get("enunciado", "").split())
+        return f"Questão {q.get('numero', indice + 1)}  ·  {status}\n{resumo[:27]}{'…' if len(resumo) > 27 else ''}"
+
+    def carregar_edicao(self, item, previous=None):
+        self.current_index = item.data(Qt.UserRole) if item else None
+        if item:
+            q = self.session.questoes[self.current_index]
+            self.editor.load(q)
+            self.lbl_confianca.setText("Salva no acervo · edite na tela Questões" if self.current_index in self.session.salvas else
+                                      f"Questão {q.get('numero', self.current_index + 1)} · {'Confira o texto extraído' if q.get('confianca') != 'alta' else 'Revise enunciado e alternativas'}")
+        else:
+            self.editor.load({})
+            self.lbl_confianca.setText("Nenhuma questão neste filtro.")
+        self._sync()
+
+    def _editar_rascunho(self):
+        if self.current_index in self.session.pendentes:
+            self.session.editar(self.current_index, self.editor.data())
+            item = self.lista_questoes.currentItem()
             if item:
-                resumo = " ".join(questao["enunciado"].split()[:5])
-                item.setText(f"Q{numero} [{questao['confianca'].upper()}] - {disciplina} - {resumo}...")
-        self.disciplina_input.setCurrentText(disciplina)
-        self.topico_input.setText(categoria)
-        if self.item_atual:
-            self.carregar_edicao(self.item_atual)
-        QMessageBox.information(self, "Classificação aplicada", f"{quantidade} questão(ões) classificadas em lote.")
-
-    def carregar_edicao(self, item):
-        self.item_atual = item; q = self.questoes_extraidas[item.data(Qt.UserRole)]; self.painel_edicao.setDisabled(False); self.lbl_confianca.setText(f"<b>{q['confianca'].upper()}</b>")
-        self.lbl_confianca.setStyleSheet("color: green;" if q["confianca"] == "alta" else "color: orange;"); texto = q["enunciado"]
-        self.enunciado_input.setText(texto); self.tipo_combo.setCurrentText(q["tipo"])
-        self.topico_input.setText(q.get("topico", ""))
-        self.alternativas_tabela.setEnabled(q["tipo"] == "multipla_escolha")
-        for linha in range(self.alternativas_tabela.rowCount()):
-            item_letra = self.alternativas_tabela.item(linha, 0)
-            item_texto = self.alternativas_tabela.item(linha, 1)
-            if item_letra is None:
-                item_letra = QTableWidgetItem("ABCDE"[linha]); self.alternativas_tabela.setItem(linha, 0, item_letra)
-            item_letra.setText("ABCDE"[linha])
-            item_letra.setFlags(item_letra.flags() & ~Qt.ItemIsEditable)
-            texto_opcao = q.get("alternativas") or []
-            valor = next((a["texto"] for a in texto_opcao if a["letra"].upper() == "ABCDE"[linha]), "")
-            if item_texto is None:
-                item_texto = QTableWidgetItem(); self.alternativas_tabela.setItem(linha, 1, item_texto)
-            item_texto.setText(valor)
-        self.gabarito_input.setCurrentText(q.get("gabarito") or ("Certo" if q["tipo"] == "certo_errado" else "A"))
+                item.setText(self._item_text(self.current_index))
+            self._sync()
 
     def salvar_questao(self):
-        if not self.item_atual: return
-        alternativas = []
-        if self.tipo_combo.currentText() == "multipla_escolha":
-            for linha in range(self.alternativas_tabela.rowCount()):
-                texto = self.alternativas_tabela.item(linha, 1)
-                if texto and texto.text().strip():
-                    alternativas.append({"letra": "ABCDE"[linha], "texto": texto.text().strip()})
-        dados = {"enunciado": self.enunciado_input.toPlainText(), "tipo": self.tipo_combo.currentText(), "alternativas": alternativas, "disciplina": self.disciplina_input.currentText(), "topico": self.topico_input.text().strip(), "banca": self.banca_input.currentText(), "ano": int(self.ano_input.text()) if self.ano_input.text().isdigit() else None, "dificuldade": "media", "gabarito": self.gabarito_input.currentText()}
-        try:
-            repo.criar_questao(dados); row = self.lista_questoes.row(self.item_atual); self.lista_questoes.takeItem(row); self.painel_edicao.setDisabled(True); self.item_atual = None; logger.info("Questão importada salva"); QMessageBox.information(self, "Sucesso", "Questão salva no banco!")
-        except Exception:
-            logger.exception("Erro ao salvar questão importada")
-            QMessageBox.critical(self, "Erro", "Erro ao salvar. Consulte data/app.log para detalhes.")
+        if self.current_index in self.session.pendentes:
+            self._salvar([self.current_index])
 
     def salvar_todas(self):
-        if not self.questoes_extraidas:
+        self._salvar(self.session.pendentes)
+
+    def _salvar(self, indices):
+        if self.ocupada or not indices:
             return
-        sem_gabarito = sum(1 for q in self.questoes_extraidas if not q.get("gabarito"))
-        if sem_gabarito:
-            resposta = QMessageBox.question(self, "Gabaritos ausentes", f"{sem_gabarito} questão(ões) estão sem gabarito. Salvar mesmo assim?", QMessageBox.Yes | QMessageBox.No)
-            if resposta != QMessageBox.Yes:
+        for i in indices:
+            try:
+                validar_questao(self.session.questoes[i])
+            except ValueError as exc:
+                self.current_index = i
+                self.filtro.setCurrentIndex(0)
+                self._refresh_list()
+                self._informar(f"Questão {self.session.questoes[i].get('numero', i + 1)}: {exc}", True)
                 return
+        sem = sum(not self.session.questoes[i].get("gabarito") for i in indices)
+        if sem and QMessageBox.question(self, "Salvar sem gabarito?", f"{sem} questão(ões) ficarão disponíveis para revisão, mas não entrarão em novas provas até receberem um gabarito. Salvar?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.session.estado = EstadoImportacao.SALVANDO
+        self._sync()
         try:
-            questoes = []
-            for q in self.questoes_extraidas:
-                dados = {"enunciado": q["enunciado"], "tipo": q["tipo"], "alternativas": q.get("alternativas") or [], "disciplina": q.get("disciplina") or self.disciplina_input.currentText(), "topico": q.get("topico") or self.topico_input.text().strip(), "banca": q.get("banca") or self.banca_input.currentText(), "ano": q.get("ano") or (int(self.ano_input.text()) if self.ano_input.text().isdigit() else None), "dificuldade": "media", "gabarito": q.get("gabarito")}
-                questoes.append(dados)
-            repo.criar_questoes_em_lote(questoes)
-            self.lista_questoes.clear(); self.questoes_extraidas = []; self.item_atual = None; self.painel_edicao.setDisabled(True)
-            QMessageBox.information(self, "Sucesso", "Todas as questões foram salvas no banco!")
+            ids = repo.criar_questoes_em_lote([self.session.questoes[i] for i in indices])
+            self.session.marcar_salvas(indices, ids)
         except Exception:
-            logger.exception("Erro ao salvar questões importadas em lote")
-            QMessageBox.critical(self, "Erro", "Erro ao salvar em lote. Consulte data/app.log para detalhes.")
+            logger.exception("Falha ao salvar lote revisado")
+            self.session.restaurar_estado()
+            self._informar("Não foi possível salvar. Os rascunhos foram preservados; tente novamente.", True)
+        else:
+            self._informar(f"{len(ids)} questão(ões) adicionadas ao acervo. Os itens salvos não serão importados novamente neste lote.")
+        self._refresh_list()
+        self._sync()
+
+    def _classificar_dialog(self):
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Classificar por número oficial")
+        dialog.resize(390, 340)
+        form = QFormLayout(dialog)
+        form.setRowWrapPolicy(QFormLayout.WrapAllRows)
+        inicio, fim = QSpinBox(), QSpinBox()
+        numeros = [int(q.get("numero", i + 1)) for i, q in enumerate(self.session.questoes)]
+        for widget in (inicio, fim):
+            widget.setRange(min(numeros), max(numeros))
+        fim.setValue(max(numeros))
+        disciplina, topico = QLineEdit(), QLineEdit()
+        for label, widget in [("Da questão", inicio), ("Até a questão", fim), ("Disciplina", disciplina), ("Assunto", topico)]:
+            form.addRow(label, widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Aplicar")
+        buttons.button(QDialogButtonBox.Cancel).setText("Cancelar")
+        buttons.rejected.connect(dialog.reject)
+        def aplicar():
+            try:
+                qtd = self.session.classificar(inicio.value(), fim.value(), disciplina.text(), topico.text())
+            except ValueError as exc:
+                QMessageBox.warning(dialog, "Revise o intervalo", str(exc))
+                return
+            self._refresh_list()
+            self._informar(f"{qtd} questão(ões) não salvas classificadas pelo número oficial.")
+            dialog.accept()
+        buttons.accepted.connect(aplicar)
+        form.addRow(buttons)
+        dialog.exec()

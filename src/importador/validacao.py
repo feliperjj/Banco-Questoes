@@ -3,9 +3,44 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import re
 
 
 GABARITOS_VALIDOS = frozenset({"A", "B", "C", "D", "E", "CERTO", "ERRADO", "ANULADA", "X"})
+
+
+def inicio_suspeito(enunciado: str) -> bool:
+    """Minúscula após aspas/pontuação é alerta, nunca motivo para cortar texto."""
+    texto = (enunciado or "").lstrip(" \n\r\t\"'“”‘’([{—–-…")
+    return bool(texto and texto[0].islower())
+
+
+def problemas_estrutura(questao: dict) -> list[str]:
+    problemas = []
+    texto = questao.get('enunciado') or ''
+    if not texto.strip():
+        problemas.append('Enunciado vazio')
+    if re.search(r'\b(?:alternativa que|afirmação que)\s*$', texto, re.I):
+        problemas.append('Comando aparentemente incompleto')
+    alternativas = questao.get('alternativas') or []
+    if questao.get('tipo') == 'multipla_escolha':
+        letras = sorted(a['letra'] for a in alternativas if a.get('texto', '').strip())
+        if len(letras) < 2 or letras != list('ABCDE'[:len(letras)]):
+            problemas.append('Alternativas ausentes ou com letras repetidas')
+        if questao.get('gabarito') in set('ABCDE') and questao.get('gabarito') not in letras:
+            problemas.append('Alternativa do gabarito ausente')
+        def marcador_fundido(t):
+            for m in re.finditer(r'\s[b-eB-E]\)\s+\S', t):
+                prefixo = t[:m.start()]
+                if prefixo.count('(') <= prefixo.count(')'):
+                    return True
+            return False
+        if any(marcador_fundido(a.get('texto', '')) for a in alternativas):
+            problemas.append('Possíveis alternativas fundidas')
+    if any(re.search(r'TIPO\s+\w+\s*[–—-]\s*P[ÁA]GINA\s+\d+', t, re.I)
+           for t in [texto] + [a.get('texto', '') for a in alternativas]):
+        problemas.append('Rodapé misturado ao conteúdo')
+    return problemas
 
 
 def normalizar_gabarito(valor: str | None, tipo: str | None = None) -> str | None:

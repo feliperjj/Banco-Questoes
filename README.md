@@ -7,7 +7,7 @@ O projeto importa provas em PDF/DOCX, interpreta questões e gabaritos, permite 
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Interface](https://img.shields.io/badge/Interface-PySide6-41CD52?logo=qt&logoColor=white)
 ![Banco](https://img.shields.io/badge/Banco-SQLite-003B57?logo=sqlite&logoColor=white)
-![Testes](https://img.shields.io/badge/Testes-48%20aprovados-2ea44f)
+![Testes](https://img.shields.io/badge/Testes-66%20aprovados-2ea44f)
 
 ## O problema que o projeto resolve
 
@@ -219,9 +219,70 @@ Antes de alterar comportamento existente, consulte o [cérebro operacional](docs
 
 - A extração de banca depende de evidência no texto do arquivo; nomes de arquivos ainda não são uma fonte universal de metadados.
 - PDFs com layouts muito diferentes podem exigir uma nova heurística e um caso de teste específico.
-- Tentativas interrompidas ficam registradas como abertas, mas ainda não possuem uma tela de retomada completa.
+- Tentativas interrompidas podem ser retomadas pelo botão **Retomar prova**, com respostas, questão atual e tempo ativo salvos. O tempo com o aplicativo fechado não é contabilizado.
 - A revisão humana continua necessária quando o PDF não contém texto confiável ou quando o gabarito é ambíguo.
 
 ## Licença
 
 Este projeto ainda não possui uma licença pública definida. Consulte o autor antes de redistribuir o código, os PDFs ou as imagens de provas.
+
+## Melhorias de edição e retomada
+
+O editor permite cadastrar e editar alternativas A–E, manter questões sem gabarito
+ou anuladas e alterar os campos exibidos sem apagar cargo, órgão ou comentário.
+O gerador conta apenas as questões elegíveis para seleção.
+
+O progresso é gravado localmente a cada resposta, mudança de questão e segundo
+ativo. A retomada reutiliza a tentativa aberta; os rascunhos não entram nas
+estatísticas e são removidos ao finalizar. Uma queda abrupta pode perder a fração
+de segundo desde a última gravação. A tabela de progresso é criada automaticamente
+sem apagar as tabelas existentes.
+
+As dependências diretas estão fixadas em `requirements.txt`. Para reproduzir também
+as versões transitivas do ambiente Windows validado, use:
+
+```powershell
+python -m pip install -r requirements-lock.txt
+```
+
+O lock registra o ambiente local; a compatibilidade Linux continua sendo verificada
+pelo CI. O projeto usa `opencv-python`, também requerido pelo RapidOCR, evitando
+instalar simultaneamente duas distribuições que fornecem o módulo `cv2`.
+
+## Reimportação verificada — setembro de 2026
+
+A reimportação dos 23 PDFs atingiu **909/984 vínculos (92,38%)**, superando o
+baseline reproduzido de 820/979 (83,76%) em 89 vínculos e 8,62 pontos percentuais.
+A contagem foi confirmada no SQLite, com zero divergências por ID e gabarito.
+Também foram corrigidas 56 respostas do MPO associadas ao bloco errado.
+
+A métrica mede cobertura das questões extraídas; ainda existem cadernos com
+extração parcial e 75 questões sem gabarito. Veja as evidências, limitações,
+backup e comparação por arquivo no [relatório de match](docs/RELATORIO_MATCH_90.md).
+
+## Interface reformulada
+
+A importação agora segue três etapas: **Arquivo → Gabarito → Revisão**.
+Na revisão, filtre questões sem gabarito, corrija o texto e classifique intervalos
+pelo número oficial. As edições permanecem no rascunho ao mudar de questão ou aba.
+Os botões de salvar ficam fora da área de rolagem; salvar uma questão e depois
+o restante do mesmo lote não duplica os itens já salvos.
+
+O acervo e a importação usam o mesmo editor, com abas de conteúdo e classificação.
+O acervo oferece busca e filtros por situação do gabarito. Falhas de leitura ou
+gravação preservam a revisão atual. Rascunhos de importação ficam em memória:
+ao fechar ou substituir um lote não salvo, o aplicativo pede confirmação.
+
+A base continua em PySide6, sem nova dependência visual. Os testes de regressão
+estão em `tests/test_ui_reforma.py`. Para gerar capturas com banco temporário:
+
+```powershell
+python -m scripts.verificar_ui_reforma --output outputs/ui
+$env:QT_SCALE_FACTOR='1.25'
+python -m scripts.verificar_ui_reforma --output outputs/ui-125
+```
+
+
+### Importação híbrida por formato
+
+O importador combina perfis especializados, segmentação geral e revisão de conflitos. Consulte [formatos, limites e diagnóstico](docs/IMPORTACAO_HIBRIDA.md). O comando `python scripts/diagnosticar_formato.py caderno.pdf --saida diagnostico.json` permite inspecionar a extração sem gravar no banco.

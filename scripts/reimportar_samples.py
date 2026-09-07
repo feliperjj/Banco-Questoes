@@ -7,7 +7,11 @@ extração bem-sucedida substitui as questões e seus dados dependentes.
 from __future__ import annotations
 
 import json
+import argparse
+import hashlib
+import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from src.db.database import db, init_db
 from src.db.models import (
     ALL_MODELS,
+    ProgressoTentativa,
     Alternativa,
     Prova,
     ProvaQuestao,
@@ -95,12 +100,17 @@ def _dados_questao(questao: dict) -> dict:
 
 def _limpar_banco():
     # A ordem respeita as foreign keys do SQLite.
-    for modelo in (Resposta, Tentativa, RevisaoEspacada, ProvaQuestao, Prova, Alternativa, Questao):
+    for modelo in (ProgressoTentativa, Resposta, Tentativa, RevisaoEspacada, ProvaQuestao, Prova, Alternativa, Questao):
         modelo.delete().execute()
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Reimportação com backup e conferência de cobertura")
+    parser.add_argument("--min-cobertura", type=float, default=0, help="Exige cobertura acima deste percentual antes de alterar o banco")
+    args = parser.parse_args()
     pdfs = sorted(path for path in SAMPLES.rglob("*.pdf") if _is_question_pdf(path))
+    if not pdfs:
+        raise RuntimeError("Nenhum PDF encontrado; o banco foi preservado.")
     resultados = []
     dados_importacao = []
 
@@ -140,23 +150,45 @@ def main() -> None:
             }
         )
         dados_importacao.append(dados)
+        resultados[-1]["sha256_caderno"] = hashlib.sha256(caminho.read_bytes()).hexdigest()
+        resultados[-1]["associacao"] = registro_gabarito
+        resultados[-1]["itens"] = [{"numero": q["numero"], "gabarito": q.get("gabarito")} for q in questoes]
+        print(f"Extraído: {caminho.name}: {len(questoes)} questões, {gabaritos_aplicados} vínculos", file=sys.stderr, flush=True)
 
+    if not any(dados_importacao):
+        raise RuntimeError("Nenhuma questão extraída; o banco foi preservado.")
+    cobertura_prevista = 100 * sum(r["gabaritos"] for r in resultados) / sum(len(d) for d in dados_importacao)
+    if cobertura_prevista <= args.min_cobertura:
+        raise RuntimeError(f"Cobertura {cobertura_prevista:.2f}% não supera {args.min_cobertura:.2f}%; banco preservado.")
+    backup = None
+    if DATABASE.exists():
+        backup = DATABASE.with_name(f"questoes.pre-reimport-{datetime.now():%Y%m%d-%H%M%S-%f}.db")
+        with sqlite3.connect(DATABASE.resolve().as_uri() + "?mode=ro", uri=True) as origem, sqlite3.connect(backup) as destino:
+            origem.backup(destino)
+            if destino.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise RuntimeError("Backup não passou na verificação; banco preservado.")
     init_db()
     from src.models.questoes_repo import _criar_questao_sem_transacao
 
     with db.atomic():
         _limpar_banco()
         total = 0
-        for dados_arquivo in dados_importacao:
-            for dados in dados_arquivo:
-                _criar_questao_sem_transacao(dados)
+        for dados_arquivo, resultado in zip(dados_importacao, resultados):
+            for dados, item in zip(dados_arquivo, resultado["itens"]):
+                item["id"] = _criar_questao_sem_transacao(dados)
                 total += 1
 
     resumo = {
         "arquivos": len(pdfs),
         "questoes_importadas": total,
+        "gabaritos_persistidos": Questao.select().where(Questao.gabarito.is_null(False), Questao.gabarito != "").count(),
+        "backup": str(backup) if backup else None,
         "por_arquivo": resultados,
     }
+    resumo["cobertura_percentual"] = 100 * resumo["gabaritos_persistidos"] / total
+    out = ROOT / "reports" / "reimportacao_samples.json"
+    out.parent.mkdir(exist_ok=True)
+    out.write_text(json.dumps(resumo, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(resumo, ensure_ascii=False, indent=2))
 
 
