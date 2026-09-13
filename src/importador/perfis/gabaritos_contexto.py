@@ -88,6 +88,25 @@ class FiltroContexto:
         return True
 
     def linhas_do_cargo(self, linhas: list[str]) -> list[str]:
+        pedido = re.search(r'(?i)(?:prova\s+tipo|tipo|prova|t)\s*(\d+)\b', self.codigo_prova)
+        tipos = [re.search(r'(?i)\bprova\s+tipo\s+(\d+)\b', linha) for linha in linhas]
+        if any(tipos):
+            selecionadas = []
+            ativo = False
+            cargo_ativo = not self.cargo_normalizado
+            for indice, (linha, tipo) in enumerate(zip(linhas, tipos)):
+                if tipo:
+                    titulo = _texto_comparavel(linha[:tipo.start()]).strip(' -–—:|')
+                    titulo = re.sub(r'^cargo\s*:\s*', '', titulo)
+                    if titulo:
+                        cargo_ativo = not self.cargo_normalizado or titulo == self.cargo_normalizado
+                    ativo = cargo_ativo and (not pedido or tipo.group(1) == pedido.group(1))
+                elif _cabecalho_cargo(linhas, indice):
+                    cargo_ativo = not self.cargo_normalizado or self.cargo_normalizado in _texto_comparavel(linha)
+                    ativo = False
+                if ativo:
+                    selecionadas.append(linha)
+            return selecionadas
         if not self.cargo_normalizado:
             return linhas
         comparaveis = [_texto_comparavel(linha) for linha in linhas]
@@ -98,7 +117,7 @@ class FiltroContexto:
         viu_resposta = False
         for i in range(inicio + 1, len(linhas)):
             linha = comparaveis[i]
-            if re.match(r"^\d{1,3}(?:\s*[:.)-]|\s+\d)", linha):
+            if re.match(r"^\d{1,3}(?:\s*[:.)-]|\s+\d|\s+[a-ex]\b)", linha):
                 viu_resposta = True
             if viu_resposta and _cabecalho_cargo(linhas, i):
                 fim = i

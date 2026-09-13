@@ -310,7 +310,7 @@ class ImportacaoPage(QWidget):
         else:
             resultado = self.session.associar(gabaritos)
             avisos_fonte = getattr(gabaritos, "avisos", [])
-            self._informar(f"{resultado['extraidos']} respostas lidas. Pendências: {len(resultado['faltantes'])} números ausentes, {len(resultado['duplicados'])} duplicados e {len(resultado['conflitos'])} conflitos.")
+            self._informar(f"{resultado['extraidos']} respostas lidas; {resultado['vinculados']} vinculadas. Pendências: {len(resultado['faltantes'])} sem resposta válida, {len(resultado.get('incompativeis', []))} incompatíveis, {len(resultado['duplicados'])} duplicados e {len(resultado['conflitos'])} conflitos.")
             if avisos_fonte:
                 self._informar(" ".join(avisos_fonte), True)
             self._refresh_list()

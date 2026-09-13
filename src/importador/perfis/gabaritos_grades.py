@@ -1,4 +1,5 @@
-from .gabaritos_contexto import _texto_comparavel
+from .gabaritos_contexto import FiltroContexto, _texto_comparavel
+from .gabaritos_resultado import MapaGabarito
 """Grades de gabarito: cargo, tipo, seções e tabelas de células."""
 import re
 import logging
@@ -7,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 def _extrair_gabaritos_tabelas(pagina) -> dict[int, str]:
     """Extrai pares de células sem confundir códigos ou anos com questões."""
-    resultado = {}
+    resultado = MapaGabarito()
     try:
         tabelas = pagina.extract_tables() or []
     except (PDFSyntaxError, ValueError, TypeError, AttributeError):
@@ -21,10 +22,13 @@ def _extrair_gabaritos_tabelas(pagina) -> dict[int, str]:
                 if not numero or int(numero.group(1)) > 200:
                     continue
                 for resposta in celulas[indice + 1:indice + 3]:
+                    if not resposta:
+                        continue
                     token = re.fullmatch(r"([A-E]|CERTO|ERRADO|X)", resposta)
                     if token:
-                        resultado.setdefault(int(numero.group(1)), token.group(1))
-                        break
+                        resultado.incorporar({int(numero.group(1)): token.group(1)})
+                    # Nunca atravessar outra questão ou uma célula ilegível.
+                    break
     return resultado
 
 
@@ -51,12 +55,12 @@ def _extrair_grade_identificada(pagina, texto, codigo_prova, cargo):
         if len(ordem) != len(ids) or set(ordem) != ids:
             return {}
         coluna = ordem.index(pedido.group(1))
-        resultado = {}
+        resultado = MapaGabarito()
         for linha in texto.splitlines():
             pares = re.findall(r'\b(\d{1,3})\s*[-–:]\s*([A-EX])\b', linha, re.I)
             if len(pares) == len(ordem)*2:
                 for n,r in pares[coluna*2:coluna*2+2]:
-                    resultado[int(n)] = r.upper()
+                    resultado.incorporar({int(n): r.upper()})
         return resultado
     secoes = list(re.finditer(r'(?im)^Provas?\s+[IVX]+(?:\s+e\s+[IVX]+)*\s*$', texto))
     if len(secoes) >= 2:
@@ -66,18 +70,22 @@ def _extrair_grade_identificada(pagina, texto, codigo_prova, cargo):
                 continue
             fim = secoes[i + 1].start() if i + 1 < len(secoes) else len(texto)
             bloco = texto[secao.end():fim]
-            return {int(n): r.upper() for n, r in re.findall(r'\b(\d{1,3})\s*[-–]\s*([A-EX])\b', bloco, re.I)}
+            from .gabaritos_texto import ExtratorPadrao
+            return ExtratorPadrao('', '').extrair(bloco.splitlines())
         return {}
     if re.search(r"(?im)^Qst\s+T1\s+T2\s+T3\s+T4\s*$", texto):
         tipo = re.fullmatch(r"(?:T|TIPO\s*|PROVA\s*)([1-4])", (codigo_prova or "").upper())
         if not tipo or not cargo or _texto_comparavel(cargo) not in _texto_comparavel(texto):
             return {}
         coluna = int(tipo.group(1))
-        return {int(m.group(1)): m.group(coluna + 1) for m in re.finditer(
-            r"(?im)^\s*(\d{1,3})\s+([A-EX])\s+([A-EX])\s+([A-EX])\s+([A-EX])\s*$", texto)}
+        bloco = '\n'.join(FiltroContexto(cargo=cargo).linhas_do_cargo(texto.splitlines()))
+        resultado = MapaGabarito()
+        for m in re.finditer(r"(?im)^\s*(\d{1,3})\s+([A-EX])\s+([A-EX])\s+([A-EX])\s+([A-EX])\s*$", bloco):
+            resultado.incorporar({int(m.group(1)): m.group(coluna + 1)})
+        return resultado
     if not re.search(r"(?im)^CARGO(?:\s+\d{1,3}){3,}\s*$", texto):
         return None
-    if not cargo:
+    if not cargo or pagina is None:
         return {}
     for tabela in pagina.extract_tables() or []:
         cabecalho = next((linha for linha in tabela if linha and str(linha[0]).strip() == "CARGO"), None)

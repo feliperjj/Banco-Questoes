@@ -49,10 +49,16 @@ def extrair_gabaritos_pdf(
     from .perfis.gabaritos_resultado import MapaGabarito
     gabaritos = MapaGabarito()
     paginas_relevantes = []
+    tabelas = MapaGabarito()
     contexto = FiltroContexto(codigo_prova, cargo)
     with pdfplumber.open(caminho) as pdf:
         for numero_pagina, pagina in enumerate(pdf.pages):
             texto = _corrigir_encoding_ocr(pagina.extract_text() or "")
+            if not texto.strip():
+                # A seleção de páginas escaneadas depende do cabeçalho lido
+                # pelo OCR; não descartar antes de poder verificar o contexto.
+                paginas_relevantes.append(numero_pagina)
+                continue
             grade = _extrair_grade_identificada(pagina, texto, codigo_prova, cargo)
             if grade is not None:
                 gabaritos.incorporar(grade)
@@ -61,35 +67,29 @@ def extrair_gabaritos_pdf(
                 continue
             linhas = [re.sub(r"\s+", " ", linha).strip() for linha in texto.splitlines()]
             paginas_relevantes.append(numero_pagina)
-            linhas = contexto.linhas_do_cargo(linhas)
+            linhas_filtradas = contexto.linhas_do_cargo(linhas)
+            # Tabelas da página inteira não podem reintroduzir outro cargo.
+            if linhas_filtradas == linhas:
+                tabelas.incorporar(_extrair_gabaritos_tabelas(pagina))
+            linhas = linhas_filtradas
             resultado = selecionar_extrator(
                 texto, contexto.codigo_prova, contexto.cargo_normalizado,
             ).extrair(linhas)
             if resultado or getattr(resultado, "conflitos", None):
                 gabaritos.incorporar(resultado)
                 continue
-            if len(gabaritos) >= 120 and codigo_prova:
-                break
     logger.info("Gabarito extraído: %s itens de %s", len(gabaritos), caminho)
     # Tabelas complementam o texto; nunca substituem uma resposta textual.
-    with pdfplumber.open(caminho) as pdf:
-        for numero_pagina in paginas_relevantes:
-            for numero, resposta in _extrair_gabaritos_tabelas(pdf.pages[numero_pagina]).items():
-                if numero not in gabaritos.conflitos:
-                    gabaritos.setdefault(numero, resposta)
+    gabaritos.complementar(tabelas)
     faltantes = set(numeros_esperados or ()) - set(gabaritos)
     # Sem números esperados, OCR é fallback apenas para extração vazia. Isso
     # evita completar um gabarito curto e íntegro com ruído de outras páginas.
     precisa_ocr = usar_ocr and (not gabaritos or bool(faltantes))
     if precisa_ocr:
-        for numero, resposta in (_ocr or _extrair_gabaritos_ocr)(
-            caminho, cargo=cargo, indices_paginas=paginas_relevantes,
-        ).items():
-            if numero in gabaritos.conflitos:
-                continue
-            if numeros_esperados is not None and numero not in numeros_esperados:
-                continue
-            gabaritos.setdefault(numero, resposta)
+        resultado_ocr = (_ocr or _extrair_gabaritos_ocr)(
+            caminho, cargo=cargo, codigo_prova=codigo_prova, indices_paginas=paginas_relevantes,
+        )
+        gabaritos.complementar(resultado_ocr, numeros_esperados)
     return gabaritos
 
 

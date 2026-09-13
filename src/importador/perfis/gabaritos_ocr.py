@@ -99,10 +99,10 @@ def _ler_celula(imagem, centro_y, centro_x, ocr):
     return None
 
 
-def _extrair_pares_ocr(deteccoes) -> dict[int, str]:
-    """Interpreta texto OCR simples quando a grade não foi detectada."""
+def _linhas_ocr(deteccoes) -> list[str]:
+    """Reconstrói linhas preservando números explícitos e a ordem das colunas."""
     if not deteccoes:
-        return {}
+        return []
     linhas = []
     for caixa, texto, confianca in deteccoes:
         texto = str(texto).strip().upper()
@@ -114,22 +114,23 @@ def _extrair_pares_ocr(deteccoes) -> dict[int, str]:
             linha = [topo, []]
             linhas.append(linha)
         linha[1].append((sum(ponto[0] for ponto in caixa) / 4, texto))
-    resultado = {}
-    for _, palavras in sorted(linhas, key=lambda item: item[0]):
-        texto = " ".join(valor for _, valor in sorted(palavras))
-        for numero, resposta in re.findall(r"\b(\d{1,3})\s*[-–:.)]?\s*([A-E])\b", texto):
-            resultado[int(numero)] = resposta
-    return resultado
+    return [" ".join(valor for _, valor in sorted(palavras))
+            for _, palavras in sorted(linhas, key=lambda item: item[0])]
+
+
+def _extrair_pares_ocr(deteccoes) -> dict[int, str]:
+    from .gabaritos_texto import ExtratorPadrao
+    return ExtratorPadrao('', '').extrair(_linhas_ocr(deteccoes))
 
 
 def _extrair_gabaritos_ocr(
     caminho: str,
     cargo: str | None = None,
     indices_paginas: list[int] | None = None,
+    codigo_prova: str | None = None,
 ) -> dict[int, str]:
     """Lê tabelas de gabarito escaneadas usando OCR somente no ambiente Python."""
     try:
-        import cv2
         import numpy as np
         from rapidocr_onnxruntime import RapidOCR
     except ImportError:
@@ -138,7 +139,12 @@ def _extrair_gabaritos_ocr(
 
     try:
         ocr = RapidOCR()
-        resultado = {}
+        from .gabaritos_contexto import FiltroContexto
+        from .gabaritos_grades import _extrair_grade_identificada
+        from .gabaritos_resultado import MapaGabarito
+        from .gabaritos_texto import selecionar_extrator
+        resultado = MapaGabarito()
+        contexto = FiltroContexto(codigo_prova, cargo)
         with pdfplumber.open(caminho) as pdf:
             paginas = indices_paginas if indices_paginas is not None else list(range(len(pdf.pages)))
             for numero_pagina in paginas:
@@ -149,21 +155,21 @@ def _extrair_gabaritos_ocr(
                 deteccoes, _ = ocr(imagem)
                 if not deteccoes:
                     continue
-                if template.tipo != "grade":
-                    for numero, resposta in _extrair_pares_ocr(deteccoes).items():
-                        resultado.setdefault(numero, resposta)
+                linhas = _linhas_ocr(deteccoes)
+                texto = '\n'.join(linhas)
+                if not contexto.pagina_relevante(texto):
                     continue
-                cabecalho_y = _detectar_cabecalho_y(deteccoes)
-                centros_y, centros_x = _detectar_grade(imagem, cabecalho_y)
-                if centros_x:
-                    offset = max(resultado, default=0)
-                    for linha, centro_y in enumerate(centros_y):
-                        for coluna, centro_x in enumerate(centros_x):
-                            letra = _ler_celula(imagem, centro_y, centro_x, ocr)
-                            if letra is not None:
-                                resultado.setdefault(offset + linha * template.colunas + coluna + 1, letra)
-                for numero, resposta in _extrair_pares_ocr(deteccoes).items():
-                    resultado.setdefault(numero, resposta)
+                # Grades sem numeração legível não autorizam gerar números
+                # pelo índice da célula ou pelo último item da página anterior.
+                # Grades multiprova sem geometria confiável ficam pendentes.
+                grade = _extrair_grade_identificada(None, texto, codigo_prova, cargo)
+                if grade is not None:
+                    resultado.incorporar(grade)
+                    continue
+                linhas = contexto.linhas_do_cargo(linhas)
+                resultado.incorporar(selecionar_extrator(
+                    texto, contexto.codigo_prova, contexto.cargo_normalizado,
+                ).extrair(linhas))
         logger.info("OCR de gabarito: %s itens reconhecidos", len(resultado))
         return resultado
     except (ImportError, RuntimeError, PDFSyntaxError):

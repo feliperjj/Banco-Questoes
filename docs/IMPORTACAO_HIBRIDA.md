@@ -26,6 +26,37 @@ A importação combina leitores especializados com uma segmentação geral conse
 
 A arquitetura permite acrescentar novos perfis, mas não representa cobertura de todos os PDFs possíveis. Fórmulas, imagens, tabelas complexas, OCR ruim e textos sem marcadores inequívocos continuam exigindo revisão. O número extraído não comprova a qualidade do enunciado.
 
+## Associação e integridade dos gabaritos
+
+Os perfis `ExtratorExtenso` e `ExtratorHorizontal` tratam palavras de resposta e
+blocos alinhados separadamente. `ExtratorPadrao` combina esses resultados com
+pares na mesma linha, processando todos os blocos da página. Listas verticais
+são blocos unitários; sequências V/F não encerram a leitura após a primeira linha.
+
+- Blocos horizontais exigem a mesma quantidade de números e tokens. `?`, `*` e
+  `0` preservam uma lacuna sem deslocar as respostas seguintes; não são anulações.
+- `MapaGabarito` preserva conflitos em listas, grades, tabelas e complementos OCR.
+  Texto tem prioridade sobre complementos; um conflito textual não pode ser
+  preenchido novamente por outra leitura.
+- Seleção por tipo também recorta os blocos de um mesmo cargo na mesma página.
+  Tabelas extraídas da página inteira não complementam um recorte de outro contexto.
+- O OCR recebe cargo e código, reconstrói linhas e usa os perfis textuais. Números
+  não são inventados a partir da posição da célula ou do último item de outra página.
+  Grades escaneadas sem numeração legível ou sem seleção geométrica segura ficam
+  pendentes. Isso pode reduzir a cobertura automática dessas digitalizações.
+- A associação rejeita respostas incompatíveis com o tipo da questão ou com as
+  alternativas extraídas. Diagnóstico e revisão exibem essas pendências; elas não
+  contam como cobertura confirmada.
+
+Na geração de provas, registros antigos com respostas incompatíveis também são
+excluídos pela validação de estrutura. A tela informa quando a quantidade apta é
+menor que a solicitada e confirma a quantidade efetivamente gerada.
+
+As regressões específicas estão em `tests/test_gabaritos_seguranca.py`. Os testes
+de OCR desse arquivo usam detecções controladas; não medem a precisão do motor em
+novas digitalizações. As amostras reais continuam cobertas pelos demais testes de
+importação, incluindo os 120 vínculos da PF/CEBRASPE 2025.
+
 ## Organização do código
 
 - `extrator.py`: API de compatibilidade, sem algoritmo aglomerado.

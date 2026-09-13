@@ -78,6 +78,7 @@ class GeradorProvaPage(QWidget):
         form.addWidget(self.tempo_input, 4, 1)
 
         self.lbl_disponiveis = QLabel()
+        self.lbl_disponiveis.setWordWrap(True)
         self.lbl_disponiveis.setObjectName("generator-availability")
         form.addWidget(self.lbl_disponiveis, 4, 2, 1, 2)
 
@@ -124,6 +125,7 @@ class GeradorProvaPage(QWidget):
         self.disciplina_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.topico_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.tipo_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
+        self.qtd_input.valueChanged.connect(self._atualizar_disponibilidade)
         self.carregar_provas()
         self._atualizar_disponibilidade()
 
@@ -158,7 +160,11 @@ class GeradorProvaPage(QWidget):
             QMessageBox.warning(self, "Aviso", "Nenhuma questão encontrada com estes filtros. A prova não foi criada.")
         else:
             logger.info("Prova %s criada", prova_id)
-            QMessageBox.information(self, "Sucesso", "Prova gerada com sucesso!")
+            quantidade = len(repo.buscar_questoes_da_prova(prova_id))
+            mensagem = f"Prova gerada com {quantidade} questão(ões)."
+            if quantidade < self.qtd_input.value():
+                mensagem += f" Foram solicitadas {self.qtd_input.value()}, mas apenas {quantidade} estavam aptas com estes filtros."
+            QMessageBox.information(self, "Sucesso", mensagem)
             self.nome_input.clear()
             self.carregar_provas()
 
@@ -173,7 +179,10 @@ class GeradorProvaPage(QWidget):
         if self.tipo_input.currentData():
             filtros["tipo"] = self.tipo_input.currentData()
         total = repo.contar_questoes_elegiveis(filtros)
-        self.lbl_disponiveis.setText(f"{total} questão(ões) disponíveis")
+        disponibilidade = f"{total} questão(ões) disponíveis"
+        if 0 < total < self.qtd_input.value():
+            disponibilidade += f". A prova terá {total} das {self.qtd_input.value()} solicitadas."
+        self.lbl_disponiveis.setText(disponibilidade)
         self.lbl_disponiveis.setProperty("empty", total == 0)
         self.lbl_disponiveis.style().unpolish(self.lbl_disponiveis)
         self.lbl_disponiveis.style().polish(self.lbl_disponiveis)
