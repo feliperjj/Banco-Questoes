@@ -106,6 +106,8 @@ def buscar_questoes(filtros: dict = None, texto: str = None) -> list[dict]:
         query = query.where(Questao.disciplina == filtros["disciplina"])
     if filtros and filtros.get("tipo"):
         query = query.where(Questao.tipo == filtros["tipo"])
+    if filtros and filtros.get("banca"):
+        query = query.where(Questao.banca == filtros["banca"])
     if filtros and filtros.get("topico"):
         query = query.where(Questao.topico == filtros["topico"])
     return [_questao_dict(questao) for questao in prefetch(query, Alternativa)]
@@ -142,6 +144,8 @@ def _filtros_para_query(query, filtros):
         query = query.where(Questao.disciplina == filtros["disciplina"])
     if filtros and filtros.get("tipo"):
         query = query.where(Questao.tipo == filtros["tipo"])
+    if filtros and filtros.get("banca"):
+        query = query.where(Questao.banca == filtros["banca"])
     if filtros and filtros.get("topico"):
         query = query.where(Questao.topico == filtros["topico"])
     return query

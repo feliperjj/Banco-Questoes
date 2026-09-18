@@ -61,37 +61,43 @@ class GeradorProvaPage(QWidget):
         form.addWidget(self._label("Disciplina"), 3, 0)
         form.addWidget(self.disciplina_input, 3, 1)
 
+        self.banca_input = QComboBox()
+        self.banca_input.addItem("Todas as bancas")
+        self.banca_input.addItems(repo.listar_bancas())
+        form.addWidget(self._label("Banca"), 3, 2)
+        form.addWidget(self.banca_input, 3, 3)
+
         self.topico_input = QComboBox()
         self.topico_input.addItem("Todas as categorias")
         self.topico_input.addItems(repo.listar_topicos())
-        form.addWidget(self._label("Categoria"), 3, 2)
-        form.addWidget(self.topico_input, 3, 3)
+        form.addWidget(self._label("Categoria"), 4, 0)
+        form.addWidget(self.topico_input, 4, 1)
 
         self.tipo_input = QComboBox()
         self.tipo_input.addItem("Todos os tipos", "")
         self.tipo_input.addItem("Múltipla escolha", "multipla_escolha")
         self.tipo_input.addItem("Certo ou errado", "certo_errado")
-        form.addWidget(self._label("Tipo de questão"), 4, 0)
-        form.addWidget(self.tipo_input, 4, 1)
+        form.addWidget(self._label("Tipo de questão"), 4, 2)
+        form.addWidget(self.tipo_input, 4, 3)
 
         self.qtd_input = QSpinBox()
         self.qtd_input.setRange(1, 200)
         self.qtd_input.setValue(10)
         self.qtd_input.setSuffix(" questões")
-        form.addWidget(self._label("Quantidade"), 4, 2)
-        form.addWidget(self.qtd_input, 4, 3)
+        form.addWidget(self._label("Quantidade"), 5, 0)
+        form.addWidget(self.qtd_input, 5, 1)
 
         self.tempo_input = QSpinBox()
         self.tempo_input.setRange(0, 600)
         self.tempo_input.setSpecialValueText("Sem limite")
         self.tempo_input.setSuffix(" min")
-        form.addWidget(self._label("Tempo limite"), 5, 0)
-        form.addWidget(self.tempo_input, 5, 1)
+        form.addWidget(self._label("Tempo limite"), 5, 2)
+        form.addWidget(self.tempo_input, 5, 3)
 
         self.lbl_disponiveis = QLabel()
         self.lbl_disponiveis.setWordWrap(True)
         self.lbl_disponiveis.setObjectName("generator-availability")
-        form.addWidget(self.lbl_disponiveis, 5, 2, 1, 2)
+        form.addWidget(self.lbl_disponiveis, 6, 0, 1, 3)
 
         gerar_btn = QPushButton("Gerar prova")
         gerar_btn.setObjectName("primary-action")
@@ -134,6 +140,7 @@ class GeradorProvaPage(QWidget):
         layout.addWidget(self.tabela, 1)
 
         self.disciplina_input.currentTextChanged.connect(self._atualizar_disponibilidade)
+        self.banca_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.topico_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.tipo_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
         self.modo_input.currentIndexChanged.connect(self._atualizar_modo)
@@ -178,6 +185,9 @@ class GeradorProvaPage(QWidget):
             tipo = self.tipo_input.currentData()
             if disciplina and disciplina != "Todas as disciplinas":
                 filtros["disciplina"] = disciplina
+            banca = self.banca_input.currentText().strip()
+            if banca and banca != "Todas as bancas":
+                filtros["banca"] = banca
             topico = self.topico_input.currentText().strip()
             if topico and topico != "Todas as categorias":
                 filtros["topico"] = topico
@@ -228,7 +238,7 @@ class GeradorProvaPage(QWidget):
     def _atualizar_modo(self):
         cadastrada = self.modo_input.currentData() == "cadastrada"
         self.prova_cadastrada_input.setEnabled(cadastrada)
-        for campo in (self.disciplina_input, self.topico_input, self.tipo_input, self.qtd_input):
+        for campo in (self.disciplina_input, self.banca_input, self.topico_input, self.tipo_input, self.qtd_input):
             campo.setEnabled(not cadastrada)
         self._atualizar_disponibilidade()
 
@@ -262,6 +272,9 @@ class GeradorProvaPage(QWidget):
         disciplina = self.disciplina_input.currentText().strip()
         if disciplina and disciplina != "Todas as disciplinas":
             filtros["disciplina"] = disciplina
+        banca = self.banca_input.currentText().strip()
+        if banca and banca != "Todas as bancas":
+            filtros["banca"] = banca
         topico = self.topico_input.currentText().strip()
         if topico and topico != "Todas as categorias":
             filtros["topico"] = topico

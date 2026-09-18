@@ -60,6 +60,7 @@ def test_botao_iniciar_prova_mantem_altura_legivel(monkeypatch):
         (Path(__file__).parents[1] / "src" / "ui" / "styles.qss").read_text(encoding="utf-8")
     )
     monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_disciplinas", lambda: [])
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_bancas", lambda: [])
     monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_topicos", lambda: [])
     monkeypatch.setattr("src.ui.pages.gerador_prova.repo.contar_questoes_elegiveis", lambda *args, **kwargs: 0)
     monkeypatch.setattr(

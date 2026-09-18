@@ -13,6 +13,7 @@ from src.models.questoes_repo import (
     listar_provas,
     listar_provas_cadastradas,
     listar_fontes_de_prova,
+    buscar_questoes,
     obter_prova,
 )
 
@@ -136,6 +137,30 @@ def test_prova_cadastrada_preserva_ordem_e_pode_gerar_prova(tmp_path):
         .order_by(ProvaCadastradaQuestao.ordem)
     )
     assert [item.questao_id for item in ordens] == [item.questao_id for item in questoes_fonte]
+
+
+def test_questoes_importadas_tambem_entram_no_banco_aleatorio_com_filtro_de_banca(tmp_path):
+    init_db(str(tmp_path / "banco-e-prova.db"))
+    fonte_id = criar_prova_cadastrada(
+        "FGV — Agente Administrativo",
+        [
+            {
+                "enunciado": "Questão da FGV",
+                "tipo": "certo_errado",
+                "banca": "FGV",
+                "gabarito": "Certo",
+            }
+        ],
+        arquivo_questoes="fgv-agente.pdf",
+        arquivo_gabarito="fgv-agente-gabarito.pdf",
+    )
+
+    prova_id = criar_prova("Aleatória FGV", {"banca": "FGV"}, 1, None)
+
+    assert fonte_id > 0
+    assert prova_id > 0
+    assert buscar_questoes({"banca": "FGV"})[0]["banca"] == "FGV"
+    assert ProvaQuestao.select().where(ProvaQuestao.prova == prova_id).count() == 1
 
 
 def test_prova_cadastrada_incompleta_nao_pode_ser_usada(tmp_path):
