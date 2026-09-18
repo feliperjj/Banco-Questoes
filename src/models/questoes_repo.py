@@ -6,11 +6,22 @@ import datetime
 from peewee import Case, JOIN, fn, prefetch
 
 from src.db.database import db, init_db
-from src.db.models import Alternativa, Prova, ProvaQuestao, Questao, Resposta, RevisaoEspacada, Tentativa
+from src.db.models import (
+    Alternativa,
+    Prova,
+    ProvaCadastrada,
+    ProvaCadastradaQuestao,
+    ProvaQuestao,
+    Questao,
+    Resposta,
+    RevisaoEspacada,
+    Tentativa,
+)
 from src.importador.validacao import gabarito_valido, normalizar_gabarito
 
 
 CAMPOS_QUESTAO = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario")
+GABARITOS_AVALIAVEIS = ("A", "B", "C", "D", "E", "Certo", "Errado")
 
 
 def _as_dict(model, fields=None):
@@ -118,22 +129,47 @@ def listar_bancas() -> list[str]:
     return [row.banca for row in query]
 
 
-def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int) -> int:
-    init_db()
-    if quantidade <= 0:
-        return 0
-    # Questões anuladas continuam no histórico, mas não compõem novas provas:
-    # elas não são avaliáveis e poderiam gerar uma prova com denominador zero.
-    query = Questao.select(Questao.id).where(
-        (Questao.ativa == True)
-        & Questao.gabarito.in_(["A", "B", "C", "D", "E", "Certo", "Errado"])
+def _questoes_avaliaveis_query():
+    return Questao.select(Questao.id).where(
+        (Questao.ativa == True) & Questao.gabarito.in_(GABARITOS_AVALIAVEIS)
     )
+
+
+def _filtros_para_query(query, filtros):
     if filtros and filtros.get("disciplina"):
         query = query.where(Questao.disciplina == filtros["disciplina"])
     if filtros and filtros.get("tipo"):
         query = query.where(Questao.tipo == filtros["tipo"])
     if filtros and filtros.get("topico"):
         query = query.where(Questao.topico == filtros["topico"])
+    return query
+
+
+def criar_prova(
+    nome: str,
+    filtros: dict,
+    quantidade: int,
+    tempo_limite_min: int,
+    prova_cadastrada_id: int | None = None,
+    prova_existente_id: int | None = None,
+) -> int:
+    """Cria uma tentativa futura aleatória ou baseada em prova cadastrada."""
+    init_db()
+    if prova_cadastrada_id is not None and prova_existente_id is not None:
+        raise ValueError("Informe apenas uma origem para a prova.")
+    if prova_cadastrada_id is not None:
+        return criar_prova_a_partir_de_cadastrada(
+            nome, prova_cadastrada_id, tempo_limite_min
+        )
+    if prova_existente_id is not None:
+        return criar_prova_a_partir_de_existente(
+            nome, prova_existente_id, tempo_limite_min
+        )
+    if quantidade <= 0:
+        return 0
+    # Questões anuladas continuam no histórico, mas não compõem novas provas:
+    # elas não são avaliáveis e poderiam gerar uma prova com denominador zero.
+    query = _filtros_para_query(_questoes_avaliaveis_query(), filtros)
     todas_questoes = [questao.id for questao in query]
     if not todas_questoes:
         return 0
@@ -144,6 +180,215 @@ def criar_prova(nome: str, filtros: dict, quantidade: int, tempo_limite_min: int
         prova = Prova.create(nome=nome, filtros=json.dumps(configuracao))
         for ordem, q_id in enumerate(selecionadas, 1):
             ProvaQuestao.create(prova=prova.id, questao=q_id, ordem=ordem)
+    return prova.id
+
+
+def criar_prova_cadastrada(
+    nome: str,
+    lista_dados: list[dict],
+    arquivo_questoes: str | None = None,
+    arquivo_gabarito: str | None = None,
+) -> int:
+    """Salva um lote importado como uma prova de origem reutilizável."""
+    init_db()
+    nome = (nome or "").strip()
+    if not nome:
+        raise ValueError("Informe o nome da prova cadastrada.")
+    if not lista_dados:
+        raise ValueError("A prova precisa possuir ao menos uma questão.")
+    with db.atomic():
+        prova = ProvaCadastrada.create(
+            nome=nome,
+            arquivo_questoes=arquivo_questoes or None,
+            arquivo_gabarito=arquivo_gabarito or None,
+        )
+        for ordem, dados in enumerate(lista_dados, 1):
+            questao_id = dados.get("_questao_id") or _criar_questao_sem_transacao(dados)
+            if not Questao.get_or_none(Questao.id == questao_id):
+                raise ValueError("A questão revisada não existe mais no banco.")
+            ProvaCadastradaQuestao.create(
+                prova_cadastrada=prova.id,
+                questao=questao_id,
+                ordem=ordem,
+            )
+    return prova.id
+
+
+def listar_provas_cadastradas() -> list[dict]:
+    """Lista provas de origem e indica se já podem gerar uma nova prova."""
+    init_db()
+    total = fn.COUNT(ProvaCadastradaQuestao.questao).alias("qtd_questoes")
+    avaliaveis = fn.SUM(
+        Case(
+            None,
+            (
+                (
+                    (Questao.ativa == True)
+                    & Questao.gabarito.in_(GABARITOS_AVALIAVEIS),
+                    1,
+                ),
+            ),
+            0,
+        )
+    ).alias("qtd_avaliaveis")
+    query = (
+        ProvaCadastrada.select(
+            ProvaCadastrada.id,
+            ProvaCadastrada.nome,
+            ProvaCadastrada.arquivo_questoes,
+            ProvaCadastrada.arquivo_gabarito,
+            ProvaCadastrada.criada_em,
+            total,
+            avaliaveis,
+        )
+        .join(ProvaCadastradaQuestao, JOIN.LEFT_OUTER)
+        .join(Questao, JOIN.LEFT_OUTER)
+        .where(ProvaCadastrada.ativa == True)
+        .group_by(ProvaCadastrada.id)
+        .order_by(ProvaCadastrada.criada_em.desc())
+    )
+    provas = []
+    for prova in query:
+        qtd = int(prova.qtd_questoes or 0)
+        qtd_avaliaveis = int(prova.qtd_avaliaveis or 0)
+        provas.append(
+            {
+                "id": prova.id,
+                "nome": prova.nome,
+                "arquivo_questoes": prova.arquivo_questoes,
+                "arquivo_gabarito": prova.arquivo_gabarito,
+                "criada_em": _legacy_value(prova.criada_em),
+                "qtd_questoes": qtd,
+                "qtd_avaliaveis": qtd_avaliaveis,
+                "pronta": qtd > 0 and qtd == qtd_avaliaveis,
+            }
+        )
+    return provas
+
+
+def listar_fontes_de_prova() -> list[dict]:
+    """Lista provas importadas e provas já geradas que podem ser reutilizadas."""
+    fontes = [dict(prova, origem_tipo="cadastrada", origem_id=prova["id"])
+              for prova in listar_provas_cadastradas()]
+    qtd = fn.COUNT(ProvaQuestao.questao).alias("qtd_questoes")
+    query = (
+        Prova.select(Prova.id, Prova.nome, Prova.criada_em, qtd)
+        .join(ProvaQuestao, JOIN.LEFT_OUTER)
+        .group_by(Prova.id)
+        .order_by(Prova.criada_em.desc())
+    )
+    for prova in query:
+        qtd_questoes = int(prova.qtd_questoes or 0)
+        qtd_avaliaveis = (
+            Questao.select()
+            .join(ProvaQuestao)
+            .where(
+                (ProvaQuestao.prova == prova.id)
+                & (Questao.ativa == True)
+                & Questao.gabarito.in_(GABARITOS_AVALIAVEIS)
+            )
+            .count()
+        )
+        fontes.append(
+            {
+                "id": prova.id,
+                "origem_id": prova.id,
+                "origem_tipo": "existente",
+                "nome": prova.nome,
+                "criada_em": _legacy_value(prova.criada_em),
+                "qtd_questoes": qtd_questoes,
+                "qtd_avaliaveis": qtd_avaliaveis,
+                "pronta": qtd_questoes > 0 and qtd_questoes == qtd_avaliaveis,
+            }
+        )
+    return fontes
+
+
+def criar_prova_a_partir_de_cadastrada(
+    nome: str, prova_cadastrada_id: int, tempo_limite_min: int
+) -> int:
+    """Copia a composição e a ordem de uma prova cadastrada para uma prova executável."""
+    init_db()
+    fonte = ProvaCadastrada.get_or_none(
+        (ProvaCadastrada.id == prova_cadastrada_id)
+        & (ProvaCadastrada.ativa == True)
+    )
+    if fonte is None:
+        raise ValueError("A prova cadastrada informada não existe.")
+    vinculadas = list(
+        ProvaCadastradaQuestao.select(ProvaCadastradaQuestao, Questao)
+        .join(Questao)
+        .where(ProvaCadastradaQuestao.prova_cadastrada == fonte.id)
+        .order_by(ProvaCadastradaQuestao.ordem)
+    )
+    if not vinculadas:
+        raise ValueError("A prova cadastrada não possui questões.")
+    indisponiveis = [
+        item.questao_id
+        for item in vinculadas
+        if not item.questao.ativa or item.questao.gabarito not in GABARITOS_AVALIAVEIS
+    ]
+    if indisponiveis:
+        raise ValueError(
+            "A prova cadastrada possui "
+            f"{len(indisponiveis)} questão(ões) sem gabarito avaliável ou inativas. "
+            "Corrija a importação antes de utilizá-la."
+        )
+    configuracao = {
+        "modo": "prova_cadastrada",
+        "prova_cadastrada_id": fonte.id,
+        "_tempo_limite_min": max(0, int(tempo_limite_min or 0)),
+    }
+    with db.atomic():
+        prova = Prova.create(nome=nome, filtros=json.dumps(configuracao))
+        for item in vinculadas:
+            ProvaQuestao.create(
+                prova=prova.id,
+                questao=item.questao_id,
+                ordem=item.ordem,
+            )
+    return prova.id
+
+
+def criar_prova_a_partir_de_existente(
+    nome: str, prova_existente_id: int, tempo_limite_min: int
+) -> int:
+    """Copia a composição de uma prova já gerada e preserva sua ordem."""
+    init_db()
+    fonte = Prova.get_or_none(Prova.id == prova_existente_id)
+    if fonte is None:
+        raise ValueError("A prova existente informada não existe.")
+    vinculadas = list(
+        ProvaQuestao.select(ProvaQuestao, Questao)
+        .join(Questao)
+        .where(ProvaQuestao.prova == fonte.id)
+        .order_by(ProvaQuestao.ordem)
+    )
+    if not vinculadas:
+        raise ValueError("A prova existente não possui questões.")
+    indisponiveis = [
+        item.questao_id
+        for item in vinculadas
+        if not item.questao.ativa or item.questao.gabarito not in GABARITOS_AVALIAVEIS
+    ]
+    if indisponiveis:
+        raise ValueError(
+            "A prova existente possui "
+            f"{len(indisponiveis)} questão(ões) sem gabarito avaliável ou inativas."
+        )
+    configuracao = {
+        "modo": "prova_existente",
+        "prova_existente_id": fonte.id,
+        "_tempo_limite_min": max(0, int(tempo_limite_min or 0)),
+    }
+    with db.atomic():
+        prova = Prova.create(nome=nome, filtros=json.dumps(configuracao))
+        for item in vinculadas:
+            ProvaQuestao.create(
+                prova=prova.id,
+                questao=item.questao_id,
+                ordem=item.ordem,
+            )
     return prova.id
 
 

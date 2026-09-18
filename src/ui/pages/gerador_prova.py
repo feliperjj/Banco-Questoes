@@ -44,49 +44,60 @@ class GeradorProvaPage(QWidget):
         form.addWidget(self._label("Nome"), 1, 0)
         form.addWidget(self.nome_input, 1, 1, 1, 3)
 
+        self.modo_input = QComboBox()
+        self.modo_input.addItem("Questões aleatórias", "aleatoria")
+        self.modo_input.addItem("Prova cadastrada/anexada", "cadastrada")
+        form.addWidget(self._label("Origem"), 2, 0)
+        form.addWidget(self.modo_input, 2, 1)
+
+        self.prova_cadastrada_input = QComboBox()
+        self.prova_cadastrada_input.setMinimumWidth(220)
+        form.addWidget(self._label("Prova de origem"), 2, 2)
+        form.addWidget(self.prova_cadastrada_input, 2, 3)
+
         self.disciplina_input = QComboBox()
         self.disciplina_input.addItem("Todas as disciplinas")
         self.disciplina_input.addItems(repo.listar_disciplinas())
-        form.addWidget(self._label("Disciplina"), 2, 0)
-        form.addWidget(self.disciplina_input, 2, 1)
+        form.addWidget(self._label("Disciplina"), 3, 0)
+        form.addWidget(self.disciplina_input, 3, 1)
 
         self.topico_input = QComboBox()
         self.topico_input.addItem("Todas as categorias")
         self.topico_input.addItems(repo.listar_topicos())
-        form.addWidget(self._label("Categoria"), 2, 2)
-        form.addWidget(self.topico_input, 2, 3)
+        form.addWidget(self._label("Categoria"), 3, 2)
+        form.addWidget(self.topico_input, 3, 3)
 
         self.tipo_input = QComboBox()
         self.tipo_input.addItem("Todos os tipos", "")
         self.tipo_input.addItem("Múltipla escolha", "multipla_escolha")
         self.tipo_input.addItem("Certo ou errado", "certo_errado")
-        form.addWidget(self._label("Tipo de questão"), 3, 0)
-        form.addWidget(self.tipo_input, 3, 1)
+        form.addWidget(self._label("Tipo de questão"), 4, 0)
+        form.addWidget(self.tipo_input, 4, 1)
 
         self.qtd_input = QSpinBox()
         self.qtd_input.setRange(1, 200)
         self.qtd_input.setValue(10)
         self.qtd_input.setSuffix(" questões")
-        form.addWidget(self._label("Quantidade"), 3, 2)
-        form.addWidget(self.qtd_input, 3, 3)
+        form.addWidget(self._label("Quantidade"), 4, 2)
+        form.addWidget(self.qtd_input, 4, 3)
 
         self.tempo_input = QSpinBox()
         self.tempo_input.setRange(0, 600)
         self.tempo_input.setSpecialValueText("Sem limite")
         self.tempo_input.setSuffix(" min")
-        form.addWidget(self._label("Tempo limite"), 4, 0)
-        form.addWidget(self.tempo_input, 4, 1)
+        form.addWidget(self._label("Tempo limite"), 5, 0)
+        form.addWidget(self.tempo_input, 5, 1)
 
         self.lbl_disponiveis = QLabel()
         self.lbl_disponiveis.setObjectName("generator-availability")
-        form.addWidget(self.lbl_disponiveis, 4, 2, 1, 2)
+        form.addWidget(self.lbl_disponiveis, 5, 2, 1, 2)
 
         gerar_btn = QPushButton("Gerar prova")
         gerar_btn.setObjectName("primary-action")
         gerar_btn.setCursor(Qt.PointingHandCursor)
         gerar_btn.setMinimumWidth(150)
         gerar_btn.clicked.connect(self.gerar_prova)
-        form.addWidget(gerar_btn, 5, 3, alignment=Qt.AlignRight)
+        form.addWidget(gerar_btn, 6, 3, alignment=Qt.AlignRight)
         layout.addWidget(card)
 
         historico = QHBoxLayout()
@@ -124,6 +135,10 @@ class GeradorProvaPage(QWidget):
         self.disciplina_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.topico_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.tipo_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
+        self.modo_input.currentIndexChanged.connect(self._atualizar_modo)
+        self.prova_cadastrada_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
+        self._carregar_provas_cadastradas()
+        self._atualizar_modo()
         self.carregar_provas()
         self._atualizar_disponibilidade()
 
@@ -135,6 +150,7 @@ class GeradorProvaPage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._carregar_provas_cadastradas()
         self.carregar_provas()
         self._atualizar_disponibilidade()
 
@@ -144,16 +160,39 @@ class GeradorProvaPage(QWidget):
             QMessageBox.warning(self, "Aviso", "Digite um nome para a prova.")
             return
         filtros = {}
-        disciplina = self.disciplina_input.currentText().strip()
-        tipo = self.tipo_input.currentData()
-        if disciplina and disciplina != "Todas as disciplinas":
-            filtros["disciplina"] = disciplina
-        topico = self.topico_input.currentText().strip()
-        if topico and topico != "Todas as categorias":
-            filtros["topico"] = topico
-        if tipo:
-            filtros["tipo"] = tipo
-        prova_id = repo.criar_prova(nome, filtros, self.qtd_input.value(), self.tempo_input.value() or None)
+        prova_cadastrada_id = None
+        prova_existente_id = None
+        if self.modo_input.currentData() == "cadastrada":
+            origem = self.prova_cadastrada_input.currentData()
+            if not origem:
+                QMessageBox.warning(self, "Prova de origem", "Selecione uma prova cadastrada ou anexada.")
+                return
+            if origem[0] == "cadastrada":
+                prova_cadastrada_id = origem[1]
+            else:
+                prova_existente_id = origem[1]
+        else:
+            disciplina = self.disciplina_input.currentText().strip()
+            tipo = self.tipo_input.currentData()
+            if disciplina and disciplina != "Todas as disciplinas":
+                filtros["disciplina"] = disciplina
+            topico = self.topico_input.currentText().strip()
+            if topico and topico != "Todas as categorias":
+                filtros["topico"] = topico
+            if tipo:
+                filtros["tipo"] = tipo
+        try:
+            prova_id = repo.criar_prova(
+                nome,
+                filtros,
+                self.qtd_input.value(),
+                self.tempo_input.value() or None,
+                prova_cadastrada_id=prova_cadastrada_id,
+                prova_existente_id=prova_existente_id,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Prova não criada", str(exc))
+            return
         if prova_id == 0:
             QMessageBox.warning(self, "Aviso", "Nenhuma questão encontrada com estes filtros. A prova não foi criada.")
         else:
@@ -162,7 +201,57 @@ class GeradorProvaPage(QWidget):
             self.nome_input.clear()
             self.carregar_provas()
 
+    def _carregar_provas_cadastradas(self):
+        selecionada = self.prova_cadastrada_input.currentData()
+        self.prova_cadastrada_input.blockSignals(True)
+        self.prova_cadastrada_input.clear()
+        self.prova_cadastrada_input.addItem("Selecione uma prova", None)
+        for prova in repo.listar_fontes_de_prova():
+            estado = "pronta" if prova.get("pronta") else "incompleta"
+            origem_tipo = "cadastrada/anexada" if prova["origem_tipo"] == "cadastrada" else "prova existente"
+            self.prova_cadastrada_input.addItem(
+                f"{prova['nome']} · {prova['qtd_questoes']} questões ({origem_tipo}; {estado})",
+                (prova["origem_tipo"], prova["origem_id"]),
+            )
+        if selecionada:
+            indice = self.prova_cadastrada_input.findData(selecionada)
+            if indice >= 0:
+                self.prova_cadastrada_input.setCurrentIndex(indice)
+        self.prova_cadastrada_input.blockSignals(False)
+
+    def _atualizar_modo(self):
+        cadastrada = self.modo_input.currentData() == "cadastrada"
+        self.prova_cadastrada_input.setEnabled(cadastrada)
+        for campo in (self.disciplina_input, self.topico_input, self.tipo_input, self.qtd_input):
+            campo.setEnabled(not cadastrada)
+        self._atualizar_disponibilidade()
+
     def _atualizar_disponibilidade(self):
+        if self.modo_input.currentData() == "cadastrada":
+            origem = self.prova_cadastrada_input.currentData()
+            prova = next(
+                (
+                    item
+                    for item in repo.listar_fontes_de_prova()
+                    if (item["origem_tipo"], item["origem_id"]) == origem
+                ),
+                None,
+            )
+            if prova is None:
+                texto = "Selecione uma prova cadastrada para reutilizar"
+                vazio = True
+            elif prova.get("pronta"):
+                texto = f"{prova['qtd_questoes']} questão(ões) da prova original"
+                vazio = False
+            else:
+                faltantes = prova["qtd_questoes"] - prova["qtd_avaliaveis"]
+                texto = f"{faltantes} questão(ões) sem gabarito avaliável"
+                vazio = True
+            self.lbl_disponiveis.setText(texto)
+            self.lbl_disponiveis.setProperty("empty", vazio)
+            self.lbl_disponiveis.style().unpolish(self.lbl_disponiveis)
+            self.lbl_disponiveis.style().polish(self.lbl_disponiveis)
+            return
         filtros = {}
         disciplina = self.disciplina_input.currentText().strip()
         if disciplina and disciplina != "Todas as disciplinas":

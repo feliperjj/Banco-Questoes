@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from peewee import SqliteDatabase
 from src.config import DB_PATH
@@ -18,12 +19,13 @@ def _configure_database(db_path):
 
 def init_db(db_path=None):
     db_path = db.database if db_path is None else db_path
+    banco_existente = Path(str(db_path)).is_file() and Path(str(db_path)).stat().st_size > 0
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
     _configure_database(db_path)
     db.connect(reuse_if_open=True)
     from src.db.models import ALL_MODELS
     db.create_tables(ALL_MODELS, safe=True)
-    apply_migrations(db)
+    apply_migrations(db, banco_existente=banco_existente)
     return db
 
 

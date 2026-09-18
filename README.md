@@ -7,7 +7,7 @@ O projeto importa provas em PDF/DOCX, interpreta questões e gabaritos, permite 
 ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Interface](https://img.shields.io/badge/Interface-PySide6-41CD52?logo=qt&logoColor=white)
 ![Banco](https://img.shields.io/badge/Banco-SQLite-003B57?logo=sqlite&logoColor=white)
-![Testes](https://img.shields.io/badge/Testes-48%20aprovados-2ea44f)
+![Testes](https://img.shields.io/badge/Testes-54%20aprovados-2ea44f)
 
 ## O problema que o projeto resolve
 
@@ -32,6 +32,7 @@ O objetivo não é fingir que todo PDF possui o mesmo formato. O objetivo é aut
 - Edição e exclusão lógica de questões.
 - Busca por enunciado, disciplina, categoria, banca e tipo.
 - Geração de provas aleatórias com filtros e limite de tempo.
+- Cadastro de provas importadas com seus gabaritos e reutilização da composição original.
 - Execução com timer, alternativas responsivas e proteção contra finalização duplicada.
 - Histórico de provas concluídas, estatísticas e revisão espaçada.
 - Banco local, sem necessidade de servidor.
@@ -51,9 +52,10 @@ O caderno explica por que as decisões foram tomadas. O cérebro operacional dev
 2. Confira a prévia, especialmente os itens com confiança média ou baixa.
 3. Se houver gabarito, selecione o PDF correspondente ou cole a sequência de respostas.
 4. Classifique blocos por disciplina e categoria quando o PDF não trouxer esses metadados.
-5. Salve as questões.
-6. Em **Gerar Prova**, escolha filtros, quantidade e limite de tempo.
-7. Resolva a prova e confira resultado, estatísticas e revisão.
+5. Informe o nome da prova e salve o lote; a prova e o gabarito ficam disponíveis para reutilização.
+6. Em **Gerar Prova**, escolha entre questões aleatórias ou uma prova cadastrada/anexada.
+7. Defina o limite de tempo e inicie a prova.
+8. Resolva a prova e confira resultado, estatísticas e revisão.
 
 Se o gabarito puder ser colado manualmente:
 

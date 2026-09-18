@@ -55,6 +55,12 @@ class ImportacaoPage(QWidget):
         super().__init__(); layout = QVBoxLayout(self); layout.setContentsMargins(30, 26, 30, 26); layout.setSpacing(10)
         titulo = QLabel("Importar questões"); titulo.setObjectName("page-title"); layout.addWidget(titulo)
         subtitulo = QLabel("Extraia questões, associe gabaritos e revise os dados antes de salvar."); subtitulo.setObjectName("page-subtitle"); layout.addWidget(subtitulo)
+        identificacao = QHBoxLayout()
+        identificacao.addWidget(QLabel("Nome da prova cadastrada:"))
+        self.nome_prova_input = QLineEdit()
+        self.nome_prova_input.setPlaceholderText("Ex.: Concurso 2026 — Analista")
+        identificacao.addWidget(self.nome_prova_input, 1)
+        layout.addLayout(identificacao)
         top = QHBoxLayout(); top.setSpacing(8)
         self.lbl_arquivo = QLabel("Nenhum arquivo selecionado"); self.btn_selecionar_questoes = QPushButton("Selecionar Questões (PDF/DOCX)"); self.btn_selecionar_questoes.clicked.connect(self.selecionar_arquivo)
         self.lbl_arquivo.setObjectName("file-status"); self.lbl_arquivo.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -89,11 +95,11 @@ class ImportacaoPage(QWidget):
         self.topico_input = QLineEdit(); self.topico_input.setPlaceholderText("Ex.: Redes, Gramática, Banco de Dados..."); form.addRow("Categoria / Assunto:", self.topico_input)
         self.banca_input = QComboBox(); self.banca_input.setEditable(True); form.addRow("Banca:", self.banca_input)
         self.ano_input = QLineEdit(); form.addRow("Ano:", self.ano_input)
-        self.gabarito_input = QComboBox(); self.gabarito_input.addItems(["A", "B", "C", "D", "E", "Certo", "Errado", "Anulada"]); form.addRow("Gabarito (Obrigatório):", self.gabarito_input)
+        self.gabarito_input = QComboBox(); self.gabarito_input.addItems(["Sem gabarito", "A", "B", "C", "D", "E", "Certo", "Errado", "Anulada"]); form.addRow("Gabarito:", self.gabarito_input)
         salvar = QPushButton("Salvar Questão Revisada"); salvar.clicked.connect(self.salvar_questao); form.addRow(salvar)
         salvar_todas = QPushButton("Salvar Todas as Questões"); salvar_todas.clicked.connect(self.salvar_todas); form.addRow(salvar_todas)
         scroll = QScrollArea(); scroll.setObjectName("import-editor-scroll"); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); scroll.setWidget(self.painel_edicao); main.addWidget(scroll, 3); layout.addLayout(main, 1)
-        self.questoes_extraidas = []; self.item_atual = None; self.caminho_questoes = ""; self.caminho_questoes_pendente = ""; self.gabarito_thread = None; self.gabarito_worker = None; self.gabarito_progresso = None; self.questoes_thread = None; self.questoes_worker = None; self.questoes_progresso = None
+        self.questoes_extraidas = []; self.item_atual = None; self.caminho_questoes = ""; self.caminho_questoes_pendente = ""; self.caminho_gabarito = ""; self.gabarito_thread = None; self.gabarito_worker = None; self.gabarito_progresso = None; self.questoes_thread = None; self.questoes_worker = None; self.questoes_progresso = None
 
     def selecionar_arquivo(self):
         caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar Prova", "", "Arquivos (*.pdf *.docx)")
@@ -111,6 +117,8 @@ class ImportacaoPage(QWidget):
         caminho = self.caminho_questoes_pendente
         self.caminho_questoes = caminho
         self.caminho_questoes_pendente = ""
+        if not self.nome_prova_input.text().strip():
+            self.nome_prova_input.setText(os.path.splitext(os.path.basename(caminho))[0])
         self.lbl_arquivo.setText(os.path.basename(caminho))
         self.btn_selecionar_questoes.setEnabled(True); self.btn_selecionar_gabarito.setEnabled(True)
         self.lista_questoes.clear(); self.questoes_extraidas = questoes
@@ -269,19 +277,35 @@ class ImportacaoPage(QWidget):
             if item_texto is None:
                 item_texto = QTableWidgetItem(); self.alternativas_tabela.setItem(linha, 1, item_texto)
             item_texto.setText(valor)
-        self.gabarito_input.setCurrentText(q.get("gabarito") or ("Certo" if q["tipo"] == "certo_errado" else "A"))
+        self.gabarito_input.setCurrentText(q.get("gabarito") or "Sem gabarito")
 
-    def salvar_questao(self):
-        if not self.item_atual: return
+    def _dados_da_edicao_atual(self):
+        if not self.item_atual:
+            return None
         alternativas = []
         if self.tipo_combo.currentText() == "multipla_escolha":
             for linha in range(self.alternativas_tabela.rowCount()):
                 texto = self.alternativas_tabela.item(linha, 1)
                 if texto and texto.text().strip():
                     alternativas.append({"letra": "ABCDE"[linha], "texto": texto.text().strip()})
-        dados = {"enunciado": self.enunciado_input.toPlainText(), "tipo": self.tipo_combo.currentText(), "alternativas": alternativas, "disciplina": self.disciplina_input.currentText(), "topico": self.topico_input.text().strip(), "banca": self.banca_input.currentText(), "ano": int(self.ano_input.text()) if self.ano_input.text().isdigit() else None, "dificuldade": "media", "gabarito": self.gabarito_input.currentText()}
+        gabarito = self.gabarito_input.currentText()
+        return {"enunciado": self.enunciado_input.toPlainText(), "tipo": self.tipo_combo.currentText(), "alternativas": alternativas, "disciplina": self.disciplina_input.currentText(), "topico": self.topico_input.text().strip(), "banca": self.banca_input.currentText(), "ano": int(self.ano_input.text()) if self.ano_input.text().isdigit() else None, "dificuldade": "media", "gabarito": None if gabarito == "Sem gabarito" else gabarito}
+
+    def _sincronizar_edicao_atual(self):
+        dados = self._dados_da_edicao_atual()
+        if dados is not None:
+            indice = self.item_atual.data(Qt.UserRole)
+            self.questoes_extraidas[indice].update(dados)
+
+    def salvar_questao(self):
+        if not self.item_atual: return
+        dados = self._dados_da_edicao_atual()
+        indice = self.item_atual.data(Qt.UserRole)
         try:
-            repo.criar_questao(dados); row = self.lista_questoes.row(self.item_atual); self.lista_questoes.takeItem(row); self.painel_edicao.setDisabled(True); self.item_atual = None; logger.info("Questão importada salva"); QMessageBox.information(self, "Sucesso", "Questão salva no banco!")
+            questao_id = repo.criar_questao(dados)
+            self.questoes_extraidas[indice].update(dados)
+            self.questoes_extraidas[indice]["_questao_id"] = questao_id
+            row = self.lista_questoes.row(self.item_atual); self.lista_questoes.takeItem(row); self.painel_edicao.setDisabled(True); self.item_atual = None; logger.info("Questão importada salva"); QMessageBox.information(self, "Sucesso", "Questão salva no banco!")
         except Exception:
             logger.exception("Erro ao salvar questão importada")
             QMessageBox.critical(self, "Erro", "Erro ao salvar. Consulte data/app.log para detalhes.")
@@ -289,6 +313,7 @@ class ImportacaoPage(QWidget):
     def salvar_todas(self):
         if not self.questoes_extraidas:
             return
+        self._sincronizar_edicao_atual()
         sem_gabarito = sum(1 for q in self.questoes_extraidas if not q.get("gabarito"))
         if sem_gabarito:
             resposta = QMessageBox.question(self, "Gabaritos ausentes", f"{sem_gabarito} questão(ões) estão sem gabarito. Salvar mesmo assim?", QMessageBox.Yes | QMessageBox.No)
@@ -298,10 +323,17 @@ class ImportacaoPage(QWidget):
             questoes = []
             for q in self.questoes_extraidas:
                 dados = {"enunciado": q["enunciado"], "tipo": q["tipo"], "alternativas": q.get("alternativas") or [], "disciplina": q.get("disciplina") or self.disciplina_input.currentText(), "topico": q.get("topico") or self.topico_input.text().strip(), "banca": q.get("banca") or self.banca_input.currentText(), "ano": q.get("ano") or (int(self.ano_input.text()) if self.ano_input.text().isdigit() else None), "dificuldade": "media", "gabarito": q.get("gabarito")}
+                if q.get("_questao_id"):
+                    dados["_questao_id"] = q["_questao_id"]
                 questoes.append(dados)
-            repo.criar_questoes_em_lote(questoes)
+            prova_id = repo.criar_prova_cadastrada(
+                self.nome_prova_input.text().strip(),
+                questoes,
+                arquivo_questoes=self.caminho_questoes,
+                arquivo_gabarito=self.caminho_gabarito,
+            )
             self.lista_questoes.clear(); self.questoes_extraidas = []; self.item_atual = None; self.painel_edicao.setDisabled(True)
-            QMessageBox.information(self, "Sucesso", "Todas as questões foram salvas no banco!")
+            QMessageBox.information(self, "Sucesso", f"Prova cadastrada com sucesso (ID {prova_id}) e questões salvas no banco!")
         except Exception:
             logger.exception("Erro ao salvar questões importadas em lote")
             QMessageBox.critical(self, "Erro", "Erro ao salvar em lote. Consulte data/app.log para detalhes.")

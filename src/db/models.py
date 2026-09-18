@@ -43,6 +43,34 @@ class Alternativa(BaseModel):
         table_name = "alternativas"
 
 
+class ProvaCadastrada(BaseModel):
+    """Prova de origem importada e reutilizável na geração de simulados."""
+
+    id = AutoField()
+    nome = TextField()
+    arquivo_questoes = TextField(null=True)
+    arquivo_gabarito = TextField(null=True)
+    ativa = BooleanField(default=True)
+    criada_em = DateTimeField(default=datetime.datetime.now)
+
+    class Meta:
+        table_name = "provas_cadastradas"
+
+
+class ProvaCadastradaQuestao(BaseModel):
+    prova_cadastrada = ForeignKeyField(
+        ProvaCadastrada,
+        column_name="prova_cadastrada_id",
+        backref="questoes_vinculadas",
+    )
+    questao = ForeignKeyField(Questao, column_name="questao_id", backref="provas_cadastradas")
+    ordem = IntegerField()
+
+    class Meta:
+        table_name = "prova_cadastrada_questoes"
+        primary_key = CompositeKey("prova_cadastrada", "questao")
+
+
 class Prova(BaseModel):
     id = AutoField()
     nome = TextField()
@@ -99,4 +127,14 @@ class RevisaoEspacada(BaseModel):
         table_name = "revisao_espacada"
 
 
-ALL_MODELS = [Questao, Alternativa, Prova, ProvaQuestao, Tentativa, Resposta, RevisaoEspacada]
+ALL_MODELS = [
+    Questao,
+    Alternativa,
+    ProvaCadastrada,
+    ProvaCadastradaQuestao,
+    Prova,
+    ProvaQuestao,
+    Tentativa,
+    Resposta,
+    RevisaoEspacada,
+]

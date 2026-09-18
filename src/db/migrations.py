@@ -6,7 +6,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 QUESTAO_COLUMNS_V1 = {
     "disciplina": "TEXT",
@@ -22,6 +22,29 @@ QUESTAO_COLUMNS_V1 = {
     "criada_em": "DATETIME",
 }
 
+PROVA_TABLES_V2 = (
+    """
+    CREATE TABLE IF NOT EXISTS provas_cadastradas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        arquivo_questoes TEXT,
+        arquivo_gabarito TEXT,
+        ativa INTEGER NOT NULL DEFAULT 1,
+        criada_em DATETIME
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS prova_cadastrada_questoes (
+        prova_cadastrada_id INTEGER NOT NULL,
+        questao_id INTEGER NOT NULL,
+        ordem INTEGER NOT NULL,
+        PRIMARY KEY (prova_cadastrada_id, questao_id),
+        FOREIGN KEY (prova_cadastrada_id) REFERENCES provas_cadastradas(id),
+        FOREIGN KEY (questao_id) REFERENCES questoes(id)
+    )
+    """,
+)
+
 
 def backup_before_structural_change(db_path: str | Path) -> Path:
     """Cria cópia ao lado do banco antes de uma migração estrutural futura."""
@@ -31,11 +54,12 @@ def backup_before_structural_change(db_path: str | Path) -> Path:
     return destino
 
 
-def apply_migrations(database) -> None:
+def apply_migrations(database, banco_existente: bool = True) -> None:
     database.execute_sql("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     if database.execute_sql("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
         database.execute_sql("INSERT INTO schema_version (version) VALUES (0)")
     versao = int(database.execute_sql("SELECT version FROM schema_version LIMIT 1").fetchone()[0])
+    backup_criado = False
     existentes = {
         linha[1] for linha in database.execute_sql('PRAGMA table_info("questoes")').fetchall()
     }
@@ -44,6 +68,7 @@ def apply_migrations(database) -> None:
         caminho = Path(str(database.database))
         if faltantes and caminho.exists() and caminho.stat().st_size:
             backup_before_structural_change(caminho)
+            backup_criado = True
         with database.atomic():
             for nome, definicao in faltantes.items():
                 database.execute_sql(f'ALTER TABLE "questoes" ADD COLUMN "{nome}" {definicao}')
@@ -54,6 +79,24 @@ def apply_migrations(database) -> None:
                 )
             database.execute_sql("UPDATE schema_version SET version = ?", (1,))
         versao = 1
+    if versao < 2:
+        caminho = Path(str(database.database))
+        # Bancos já versionados possuem dados e precisam de uma cópia antes
+        # da alteração estrutural. Bancos novos chegam aqui com versão 0 e
+        # todas as tabelas já criadas pelo init_db; não gere backup vazio.
+        if (
+            banco_existente
+            and versao >= 1
+            and caminho.exists()
+            and caminho.stat().st_size
+            and not backup_criado
+        ):
+            backup_before_structural_change(caminho)
+        with database.atomic():
+            for definicao in PROVA_TABLES_V2:
+                database.execute_sql(definicao)
+            database.execute_sql("UPDATE schema_version SET version = ?", (2,))
+        versao = 2
     if versao != CURRENT_SCHEMA_VERSION:
         raise RuntimeError(
             f"Versão de schema não suportada: {versao}; esperada: {CURRENT_SCHEMA_VERSION}."

@@ -6,7 +6,15 @@ def test_init_db_cria_versionamento_sem_apagar_banco(tmp_path):
     caminho = tmp_path / "subdir" / "teste.db"
     banco = init_db(str(caminho))
     versao = banco.execute_sql("SELECT version FROM schema_version").fetchone()[0]
-    assert versao == 1
+    assert versao == 2
+    tabelas = {
+        linha[0]
+        for linha in banco.execute_sql(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    assert {"provas_cadastradas", "prova_cadastrada_questoes"}.issubset(tabelas)
+    assert not list(tmp_path.glob("teste.backup-*.db"))
 
 
 def test_init_db_migra_questoes_legadas_e_cria_backup(tmp_path):
@@ -21,5 +29,7 @@ def test_init_db_migra_questoes_legadas_e_cria_backup(tmp_path):
 
     colunas = {linha[1] for linha in banco.execute_sql('PRAGMA table_info("questoes")').fetchall()}
     assert {"gabarito", "cargo", "ativa", "criada_em"}.issubset(colunas)
+    assert banco.execute_sql("SELECT version FROM schema_version").fetchone()[0] == 2
     assert banco.execute_sql("SELECT enunciado FROM questoes").fetchone()[0] == "legada"
-    assert list(tmp_path.glob("legado.backup-*.db"))
+    backups = list(tmp_path.glob("legado.backup-*.db"))
+    assert len(backups) == 1
