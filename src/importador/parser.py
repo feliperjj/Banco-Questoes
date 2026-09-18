@@ -1,20 +1,25 @@
+from src.importador.perfis.lexico import (
+    _INICIO_ALTERNATIVA,
+    _INICIO_NUMERADO,
+    _INICIO_QUESTAO,
+    _INICIO_QUESTAO_NOMEADA,
+    _MARCADOR_INLINE,
+    _MARCADOR_QUESTAO,
+    _juntar_linhas,
+    _parece_grade_respostas,
+    _separar_alternativas_horizontais,
+    _partes_alternativas,
+)
 import logging
 import re
 import unicodedata
+from src.importador.perfis.certo_errado import _separar_itens_cespe
+from src.importador.perfis.multipla_escolha import _blocos_multipla_escolha, _qualidade_numeracao
+from src.importador.validacao import inicio_suspeito
 
 
 logger = logging.getLogger(__name__)
 
-_INICIO_QUESTAO = re.compile(
-    # Alguns PDFs exportam "QUESTÃO" como "QUEST�O" (caractere de
-    # substituição). O marcador precisa continuar reconhecível mesmo assim.
-    r"(?im)^((?:quest(?:ão|ao|�o)[ \t]*)?\d{1,3}(?:[ \t]*[.\-):][ \t]*|[ \t]+|[ \t]*\n))"
-)
-_INICIO_ALTERNATIVA = re.compile(r"(?im)^[ \t]*\(?([A-E])\)?\s*[.\-):]\s+")
-_INICIO_NUMERADO = re.compile(r"(?im)^[ \t]*(\d{1,3})(?:[.\-):][ \t]*|[ \t]+).+$")
-_INICIO_QUESTAO_NOMEADA = re.compile(
-    r"(?im)^((?:quest(?:ão|ao|�o)[ \t]+\d{1,3})(?:[ \t]*[.\-):]|[ \t]*\n))"
-)
 _DISCIPLINAS = (
     ("Língua Portuguesa", r"l(?:í|i|�)ngua portuguesa"),
     ("Língua Portuguesa", r"portugu(?:ê|e|�)s(?:a)?"),
@@ -36,10 +41,6 @@ _DISCIPLINAS = (
     ("Atualidades", r"atualidades"),
 )
 _SECAO_CONTAGEM = re.compile(r"\s*\|\s*\d+\s*quest(?:ão|ões|ao|oes|�o|�es).*$", re.IGNORECASE)
-_MARCADOR_QUESTAO = re.compile(r"(?i)^(?:quest(?:ão|ao|�o)[ \t]*)?(\d{1,3})(?:[ \t]*[.\-):][ \t]*|[ \t]+|[ \t]*\n)")
-_MARCADOR_INLINE = re.compile(
-    r"(?<!^)(?<!\n)[ \t]+(?=(?:(?i:quest(?:ão|ao|�o))[ \t]*)?\d{1,3}[)\-.:][ \t]+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ�])",
-)
 
 
 def _normalizar_texto(texto: str) -> str:
@@ -49,12 +50,18 @@ def _normalizar_texto(texto: str) -> str:
     return texto.strip()
 
 
-def _juntar_linhas(texto: str) -> str:
-    return re.sub(r"\s+", " ", texto).strip()
 
 
 def _quebrar_marcadores_inline(texto: str) -> str:
-    return _MARCADOR_INLINE.sub("\n", texto)
+    def separar(match):
+        seguinte = texto[match.end():]
+        antes = texto[texto.rfind('\n', 0, match.start()) + 1:match.start()]
+        if re.match(r'(?i)quest', seguinte) or len(re.findall(r'\b[A-Ea-e]\)\s', antes)) >= 2:
+            return '\n'
+        return match.group(0)
+    return _MARCADOR_INLINE.sub(separar, texto)
+
+
 
 
 def _disciplina_da_linha(linha: str) -> str:
@@ -65,8 +72,10 @@ def _disciplina_da_linha(linha: str) -> str:
     return ""
 
 
-def _tem_marcador_questao_perto(linhas: list[str], indice: int, limite=12) -> bool:
-    for linha in linhas[indice + 1:indice + 1 + limite]:
+def _tem_marcador_questao_perto(linhas: list[str], indice: int, limite=None) -> bool:
+    # Um texto-base pode ocupar páginas antes da primeira questão. Não cortar
+    # o caderno na disciplina seguinte só porque o marcador está distante.
+    for linha in linhas[indice + 1:indice + 1 + limite if limite else None]:
         linha = linha.strip()
         if _parece_grade_respostas(linha):
             continue
@@ -80,6 +89,8 @@ def _tem_marcador_questao_perto(linhas: list[str], indice: int, limite=12) -> bo
 
 
 def _remover_front_matter(texto: str) -> str:
+    if '\nTEXTO DE APOIO\n' in texto and '\nITEM PARA JULGAMENTO\n' in texto:
+        return texto
     linhas = texto.splitlines(True)
     posicao = 0
     for indice, linha_com_quebra in enumerate(linhas):
@@ -90,15 +101,13 @@ def _remover_front_matter(texto: str) -> str:
         # Não use esse título para cortar o front matter antes das instruções.
         titulo_inicial = indice < 3 and disciplina == "Administração"
         if disciplina and not titulo_inicial and (_SECAO_CONTAGEM.search(linha) or _tem_marcador_questao_perto(linhas, indice)):
+            if len(_INICIO_ALTERNATIVA.findall(texto[:posicao])) >= 2:
+                return texto
             return texto[posicao:].strip()
         posicao += len(linha_com_quebra)
     return texto
 
 
-def _parece_grade_respostas(linha: str) -> bool:
-    numeros = re.findall(r"\b\d{1,3}\b", linha)
-    palavras = re.findall(r"[A-Za-zÀ-ÿ�]{3,}", linha)
-    return len(numeros) >= 5 and not palavras
 
 
 def _quantidade_de_questoes(texto: str) -> int | None:
@@ -144,6 +153,7 @@ def _inferir_banca(texto: str, origem: str = "") -> str:
 def extrair_metadados_prova(texto: str, origem: str = "") -> dict:
     """Obtém metadados globais e a disciplina de cada questão sem depender da banca."""
     texto = _normalizar_texto(texto)
+    texto = re.sub(r'(?im)\bTIPO\s+\w+\s*[–—-]\s*P[ÁA]GINA\s+\d+[^\n]*', '', texto)
     upper = texto.upper()
     banca = _inferir_banca(texto, origem)
     linhas_contexto = [linha for linha in texto.splitlines() if re.search(r"(?i)aplica|edital|concurso|publica|realiza|prova de", linha)]
@@ -185,95 +195,52 @@ def extrair_metadados_prova(texto: str, origem: str = "") -> dict:
     return {"banca": banca, "ano": ano, "disciplinas": disciplinas}
 
 
-def _separar_itens_cespe(texto: str) -> list[str]:
-    """Separa itens CESPE, ignorando números de linha dos textos-base."""
-    candidatos = [
-        candidato for candidato in _INICIO_NUMERADO.finditer(texto)
-        if not _parece_grade_respostas(candidato.group(0))
-    ]
-    if not candidatos:
-        return []
 
-    blocos_reais = []
-    for indice, candidato in enumerate(candidatos):
-        fim = candidatos[indice + 1].start() if indice + 1 < len(candidatos) else len(texto)
-        bloco = texto[candidato.start():fim].strip()
-        # Itens da prova têm uma justificativa; números de linha dos textos-base não.
-        if "JUSTIFICATIVA" in bloco.upper():
-            blocos_reais.append(bloco)
-
-    # Algumas fontes não trazem justificativa. Nesse caso, aproveita a
-    # sequência numerada principal como fallback. Em PDFs de duas colunas a
-    # ordem de leitura pode intercalar números de texto-base (por exemplo,
-    # 1, 2, 3, 4, 10, 5, 25, 11...). Consolidar a primeira ocorrência de cada
-    # número a partir do primeiro item 1 recupera a sequência sem duplicar
-    # blocos discursivos posteriores.
-    if len(blocos_reais) < 2:
-        inicio = next((indice for indice, candidato in enumerate(candidatos) if int(candidato.group(1)) == 1), None)
-        sequencia_por_numero = {}
-        if inicio is not None:
-            for candidato in candidatos[inicio:]:
-                numero = int(candidato.group(1))
-                if numero >= 1:
-                    sequencia_por_numero.setdefault(numero, candidato)
-
-        maior_prefixo = 0
-        while maior_prefixo + 1 in sequencia_por_numero:
-            maior_prefixo += 1
-        selecionados = {
-            numero: sequencia_por_numero[numero]
-            for numero in range(1, maior_prefixo + 1)
-        }
-        # O fim do bloco é determinado pela ordem física do PDF, enquanto a
-        # saída volta à ordem numérica oficial.
-        por_posicao = sorted(selecionados.items(), key=lambda item: item[1].start())
-        blocos_por_numero = {}
-        for indice, (numero, candidato) in enumerate(por_posicao):
-            fim = por_posicao[indice + 1][1].start() if indice + 1 < len(por_posicao) else len(texto)
-            blocos_por_numero[numero] = texto[candidato.start():fim].strip()
-        blocos_reais = [blocos_por_numero[numero] for numero in range(1, maior_prefixo + 1)]
-    return blocos_reais
 
 
 def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
-    texto = _normalizar_texto(texto)
+    avisos_extracao = list(getattr(texto, "avisos", ()))
+    perfil_extracao = getattr(texto, "perfil", "texto")
+    from src.importador.perfis.normalizacao import normalizar_formatos, contextos_explicitos, textos_rotulados
+    texto = _normalizar_texto(normalizar_formatos(texto))
+    contextos = contextos_explicitos(texto)
+    rotulados = textos_rotulados(texto)
+    texto = re.sub(r'(?im)\bTIPO\s+\w+\s*[–—-]\s*P[ÁA]GINA\s+\d+[^\n]*', '', texto)
     if not texto:
         return []
+    texto = re.split(r"(?im)^prova\s+discursiva\s*$", texto, maxsplit=1)[0]
+    texto_original = texto
     texto = _quebrar_marcadores_inline(texto)
     metadados = extrair_metadados_prova(texto, origem)
     texto_questoes = _remover_front_matter(texto)
     quantidade_declarada = _quantidade_de_questoes(texto)
 
-    # Quando o PDF traz marcadores explícitos ("QUESTÃO 1"), eles têm
-    # prioridade. Números soltos também aparecem em textos-base e não podem
-    # ativar o modo CESPE por engano.
-    tem_marcadores_nomeados = bool(_INICIO_QUESTAO_NOMEADA.search(texto_questoes))
-    tem_alternativas = len(_INICIO_ALTERNATIVA.findall(texto_questoes)) >= 2
-    blocos_sem_pontuacao = [] if tem_marcadores_nomeados or tem_alternativas else _separar_itens_cespe(texto_questoes)
-    if blocos_sem_pontuacao:
-        blocos = blocos_sem_pontuacao
-    elif tem_marcadores_nomeados:
-        blocos = _INICIO_QUESTAO_NOMEADA.split(texto_questoes)
-    else:
-        blocos = _INICIO_QUESTAO.split(texto_questoes)
-    # split() devolve o texto antes do primeiro marcador e, depois, pares marcador/conteúdo.
-    candidatos = []
-    if blocos_sem_pontuacao:
-        candidatos = blocos_sem_pontuacao
-    else:
-        for indice in range(1, len(blocos), 2):
-            if indice + 1 < len(blocos):
-                candidatos.append(blocos[indice] + blocos[indice + 1])
+    from src.importador.perfis.segmentacao import segmentar
+    resultado = segmentar(texto_questoes, _remover_front_matter(texto_original), metadados["banca"])
+    candidatos = resultado.candidatos
+    tem_alternativas = resultado.tem_alternativas
+    logger.info("Perfil de importação: %s", resultado.perfil)
+    if resultado.aviso:
+        logger.warning(resultado.aviso)
 
     questoes = []
+    cursor_fonte = 0
     for numero_questao, bloco in enumerate(candidatos, 1):
         bloco = bloco.strip()
         marcador = _MARCADOR_QUESTAO.match(bloco)
         numero_real = int(marcador.group(1)) if marcador else numero_questao
         if marcador:
             bloco = bloco[marcador.end():].strip()
-        bloco = re.split(r"\s+JUSTIFICATIVA\s*[-–:]?", bloco, maxsplit=1, flags=re.IGNORECASE)[0].strip()
-        partes = _INICIO_ALTERNATIVA.split(bloco)
+        bloco = re.split(r"(?m)^[ \t]*JUSTIFICATIVA(?:[ \t]*[-–:]|[ \t]*$)", bloco, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        apoio_seguinte = re.search(r'(?im)^(?:Texto[ \t]+[A-Z0-9]+[ \t]*\n|[^\n]*(?:texto|enunciado|informa[çc][õo]es)[^\n]*quest(?:ões|oes)(?:\s+de)?(?:\s+n[úu]meros)?\s+\d+\s+(?:a|até|e)\s+\d+[^\n]*\n)', bloco)
+        primeira_alternativa = _INICIO_ALTERNATIVA.search(bloco)
+        if apoio_seguinte and primeira_alternativa and apoio_seguinte.start() > primeira_alternativa.start():
+            bloco = bloco[:apoio_seguinte.start()].rstrip()
+        partes = _partes_alternativas(bloco)
+        prefixo_fonte = partes[0].strip()[:80]
+        posicao_bloco = texto.find(prefixo_fonte, cursor_fonte)
+        if posicao_bloco >= 0:
+            cursor_fonte = posicao_bloco + len(prefixo_fonte)
         enunciado = _juntar_linhas(partes[0])
         alternativas = []
         for indice in range(1, len(partes), 2):
@@ -286,7 +253,7 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
         # também parecem marcadores de questão. Esses blocos não possuem
         # alternativas e devem ser descartados; manteríamos texto-base como
         # falsas questões, especialmente no layout de duas colunas da FGV.
-        if tem_alternativas and not alternativas:
+        if tem_alternativas and not alternativas and not (resultado.perfil.startswith('questoes_nomeadas') and re.match(r'(?i)(?:julgue|judge|certo ou errado|verdadeiro ou falso)\b', enunciado)):
             continue
         if len(enunciado) < 10:
             continue
@@ -296,10 +263,28 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
         else:
             tipo = "certo_errado"
             confianca = "alta" if len(enunciado) >= 80 else ("media" if len(enunciado) >= 30 else "baixa")
+        if inicio_suspeito(enunciado):
+            confianca = "baixa"
+        if numero_real in contextos and contextos[numero_real] not in enunciado:
+            enunciado = contextos[numero_real] + "\n\n" + enunciado
+        for referencia in re.findall(r'(?i)\btexto\s+([A-Z0-9]+)\b', enunciado):
+            anteriores = [apoio for pos, apoio in rotulados.get(referencia.upper(), []) if pos <= posicao_bloco]
+            apoio = anteriores[-1] if anteriores else None
+            if apoio and apoio not in enunciado:
+                enunciado = apoio + "\n\n" + enunciado
+        avisos = list(avisos_extracao)
+        if resultado.aviso:
+            avisos.append(resultado.aviso)
+        if re.search(r'(?i)\b(?:figura|gráfico|imagem|tabela)\s+(?:a seguir|abaixo|acima|apresentad)', enunciado):
+            avisos.append("Confira a figura ou tabela na fonte; a importação textual pode não preservar sua estrutura.")
         questoes.append({
             # Preserva o número original para que gabaritos parciais possam
             # ser associados sem deslocar respostas após uma questão perdida.
             "numero": numero_real,
+            "perfil_importacao": resultado.perfil,
+            "aviso_importacao": " ".join(dict.fromkeys(avisos)),
+            "perfil_extracao": perfil_extracao,
+            "diagnostico_importacao": list(resultado.diagnostico),
             "enunciado": enunciado,
             "tipo": tipo,
             "alternativas": alternativas or None,

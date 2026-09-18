@@ -81,9 +81,29 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 
 ## 3. Pontos de risco conhecidos
 
+Correção de simulados em 05/09/2026: alternativas horizontais são separadas;
+números no meio de frases não abrem novas questões sem evidência de marcador;
+o corte de colunas respeita divisórias verticais (linhas e retângulos estreitos).
+Comandos repetidos não são removidos como rodapés. Gabaritos com seções Prova I
+e Provas II e III exigem seleção exata do bloco. Questões 736, 833 e 7 foram
+corrigidas pontualmente com backup; gabaritos 736: A→D, 833: A→B, 7: D mantido.
+O critério compartilhado `problemas_estrutura` filtra novas provas e sinaliza
+o editor/acervo. Detectou 83 pendências no banco local; não é revisão semântica
+completa. Provas já criadas preservam a composição. Rolagem volta ao topo ao
+navegar, e V/F e enumerações I–V recebem separação visual sem mudar o banco.
+
+Correção de 05/09/2026: a repetição de “língua” em uma frase não identifica um
+cabeçalho. A heurística de línguas exige linha curta iniciada por “Língua”. No
+sample administrador-fgv, isso recupera 80 números oficiais e as alternativas
+A–E da questão 1. Início em minúscula reduz a confiança do parser e exibe alerta
+no editor, sem capitalizar, cortar ou excluir automaticamente. A questão ID 1
+do banco local foi corrigida pontualmente, preservando o gabarito e os IDs;
+backup: `data/questoes.pre-correcao-q1-20260905-121044.db`. Demais registros
+existentes não foram reimportados. Suíte após a correção: 86 testes aprovados.
+
 1. **PDFs variam muito.** Aumentar uma heurística de colunas pode recuperar uma banca e deslocar questões de outra. Toda mudança no extrator deve ter um caso positivo e um caso negativo.
 2. **Metadados de banca/disciplina são incompletos.** O parser só reconhece marcas explícitas; nome do arquivo não deve ser confundido com texto extraído sem uma regra documentada.
-3. **Tentativa interrompida.** A estrutura suporta tentativa sem `finalizada_em`, mas a UI ainda não oferece retomada explícita. Não tratar tentativa aberta como concluída.
+3. **Tentativa interrompida.** A estrutura suporta tentativa sem `finalizada_em`, e a UI oferece “Retomar prova”, restaurando respostas, índice e tempo ativo da tabela `progresso_tentativas`. Não tratar tentativa aberta como concluída.
 4. **QSS é global.** Alterar um seletor genérico pode afetar tabelas, revisão e importação. Prefira `objectName` específico de página.
 5. **Dados locais não são descartáveis.** Scripts de reimportação recriam questões e IDs e apagam provas, tentativas, respostas e revisões dependentes. Nunca executar limpeza/reimportação sem pedido explícito e criar backup do banco antes da transação.
 6. **Layout mínimo.** O tamanho mínimo deve ser validado em 1240×800 e 960×640; layouts com `minimumSize` implícito podem gerar `QWindowsWindow::setGeometry`.
@@ -202,3 +222,81 @@ O segundo comando é destrutivo para o banco local. Só deve ser executado após
   campo confirmada nas rodadas com e sem OCR; suíte automatizada: **50 testes
   passando**.
 - Relatórios versionados: `docs/RELATORIO_REIMPORTACAO_SAMPLES.md` e `docs/RELATORIO_DIAGNOSTICO_GABARITOS.md`.
+
+## Melhorias de edição e retomada — setembro de 2026
+
+- `atualizar_questao` altera somente campos presentes no dicionário recebido.
+- O editor preserva ausência de gabarito e anulação, permite alternativas A–E e
+  valida enunciado, quantidade mínima de alternativas e alternativa correta existente.
+- `contar_questoes_elegiveis` compartilha a consulta usada para criar provas.
+- `ProgressoTentativa` armazena rascunhos separados de `Resposta`; respostas parciais
+  não alteram estatísticas. A finalização apaga o rascunho na mesma transação.
+- A retomada restaura respostas, posição e tempo ativo; o tempo fechado é pausado.
+- A limpeza manual de samples inclui os rascunhos antes de apagar tentativas.
+- Regressões adicionais: `tests/test_melhorias.py`.
+
+## Reimportação de setembro de 2026 — resultado validado
+
+- 23 cadernos, 984 questões, 909 vínculos (92,38%), 75 pendências; 66 testes passaram.
+- SQLite conferido por ID/gabarito, integridade e chaves estrangeiras sem falhas.
+- Grades T1–T4 exigem tipo explícito; grades horizontais exigem cargo exato e
+  números nas células. Cabeçalhos “CARGO 1:” não são grades horizontais.
+- FGV/IESES: formato alternativo só substitui o anterior se melhorar a numeração
+  de blocos com alternativas, sem consultar gabaritos para escolher segmentação.
+- MPO usa o bloco comum da página 9 para a P1; P2 ainda requer seção separada.
+- A reimportação agora cria backup automaticamente e aceita `--min-cobertura 90`.
+- Evidências e limites: `docs/RELATORIO_MATCH_90.md`. Não confundir cobertura de
+  vínculo com precisão aferida por revisão humana integral ou completude do PDF.
+
+## Reforma estrutural e visual — setembro de 2026
+
+- `QuestionEditor` é compartilhado pelo acervo e pela importação; a validação
+  centralizada não deve inventar gabaritos nem apagar metadados não exibidos.
+- `ImportacaoSession` mantém rascunhos e índices já salvos fora dos widgets.
+  Salvar individualmente e depois em lote deve inserir apenas pendentes.
+- A classificação e o gabarito usam o número oficial, nunca a posição filtrada.
+- As etapas Arquivo/Gabarito/Revisão têm rodapé fixo. O editor rola internamente.
+- `BackgroundTask` executa uma leitura por vez e espera a limpeza nativa da
+  thread antes de liberar referências Python, necessário no Windows.
+- Fechar durante a leitura é bloqueado; descartar revisão não salva exige
+  confirmação. Rascunhos de importação não sobrevivem ao encerramento do processo.
+- Falhas de leitura preservam o lote anterior; falhas de gravação permitem retry.
+- `tests/test_ui_reforma.py` cobre navegação, persistência, falhas e ciclo da thread.
+  `scripts/verificar_ui_reforma.py` gera capturas isoladas do banco real em duas
+  dimensões, respeitando a escala definida por `QT_SCALE_FACTOR`.
+- Validação final: 76 testes aprovados; capturas em 960×640 e 1240×800,
+  escalas 100%, 125% e 150%. `tests/conftest.py` mantém uma QApplication por
+  processo e destrói widgets entre testes para não deixar eventos de telas
+  antigas acessarem o banco temporário do próximo caso.
+
+
+### 2026-09-05 — Perfis de importação e PF 2025
+
+Separação inicial por formato em `src/importador/perfis`; preservar os perfis legados ao adicionar layouts. PF 2025 fornecida: 120 itens salvos, com 96/97 anulados; não reimportar novamente sem verificar duplicatas. Relatório e limites em `RELATORIO_REGRESSOES_FORMATOS.md`. Rodar `python scripts/verificar_regressoes_perfis.py` para comparar conteúdo dos 23 PDFs com referência fixa, além do pytest. Não atualizar o manifesto automaticamente para esconder diferenças. Dois cadernos Embrapa seguem com apenas 2 itens: cobertura não equivale a qualidade.
+
+
+### 2026-09-07 — Arquitetura híbrida completa por etapas
+
+`extrator.py` virou fachada; PDF, DOCX, segmentação, contexto/grades/texto/OCR de gabarito e coordenação foram separados. A tela usa `servico.importar_caderno` e mostra avisos. Candidatos especializados concorrem com o geral sem consulta a respostas ou restrição de banca no seletor textual.
+
+23 cadernos: 1.042 → 1.239 itens; Embrapa 100+100, FEPESE 50 números oficiais e textos de apoio. Não confundir cobertura com correção integral. Gabaritos antigos tinham vazamento de cargos; Transpetro é multiprova e foi configurada explicitamente como PROVA 1 / Administração. Esta etapa não regravou o banco existente.
+
+A referência atual é `tests/fixtures/perfis_hibridos_manifest.json`; a antiga permanece separada. Verificação passou em 23/23 PDFs. Relatório: `docs/RELATORIO_IMPORTACAO_HIBRIDA.md`; arquitetura e formatos: `docs/IMPORTACAO_HIBRIDA.md`. Acrescentar evidências positivas e negativas ao alterar um perfil; não rebater referências automaticamente para esconder diferenças.
+
+Validação final desta etapa: 145 testes aprovados. Limpeza posterior de fragmento de cabeçalho no perfil Embrapa verificada por testes direcionados e atualização explícita das duas referências afetadas.
+
+### 2026-09-07 — Correção das lacunas identificadas pelo usuário
+
+Nova auditoria dos 23 PDFs: 1.239 → 1.385 questões, todas com sequência 1–N
+sem duplicatas. Corrigidos corte de texto-base longo, marcas d'água diagonais,
+colunas com alternativas recuadas, números de figuras/frações confundidos com
+questões, listas internas A–E e variáveis lógicas confundidas com alternativas.
+IADES: 120 itens com contexto; CRF: 55; Transpetro: 70 números distintos.
+Os arquivos antes considerados possivelmente parciais continham as questões
+iniciais. Não repetir a afirmação de que eram recortes sem conferir a fonte.
+
+164 testes completos aprovados e 16 direcionados após ajuste do falso aviso
+em expressão lógica. Referência atual: `perfis_corrigidos_manifest.json`, com
+as duas anteriores preservadas. Detalhes: `RELATORIO_CORRECAO_LACUNAS.md` e
+`reports/auditoria_lacunas.json`. Fidelidade de imagens/diagramas não é garantida
+por contagem completa. Não houve limpeza ou regravação automática do banco.

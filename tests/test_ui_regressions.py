@@ -61,7 +61,7 @@ def test_botao_iniciar_prova_mantem_altura_legivel(monkeypatch):
     )
     monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_disciplinas", lambda: [])
     monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_topicos", lambda: [])
-    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.buscar_questoes", lambda *args, **kwargs: [])
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.contar_questoes_elegiveis", lambda *args, **kwargs: 0)
     monkeypatch.setattr(
         "src.ui.pages.gerador_prova.repo.listar_provas",
         lambda **kwargs: [{"id": 1, "nome": "Simulado", "qtd_questoes": 10, "concluida": False}],

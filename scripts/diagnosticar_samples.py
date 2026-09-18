@@ -23,6 +23,7 @@ def main():
     samples = ROOT / "samples"
     catalogo = carregar_catalogo(ROOT / "config" / "gabaritos.json")
     relatorios = []
+    auditoria = []
     for caminho in sorted(samples.rglob("*.pdf")):
         if caminho.name.lower().startswith("gab") or "gabarito" in caminho.name.lower():
             continue
@@ -58,9 +59,12 @@ def main():
             gabarito_candidato=gabarito_candidato, cargo=cargo, codigo=codigo,
             metodo=metodo, motivos=motivos,
         ))
+        auditoria.append({"arquivo": str(caminho.relative_to(samples)), "texto": texto, "questoes": questoes, "gabaritos": gabaritos})
+        print(f"{caminho.name}: {len(questoes)} questões, {relatorios[-1]['respostas_vinculadas']} vínculos", flush=True)
     out = ROOT / "reports"
     out.mkdir(exist_ok=True)
     salvar_relatorio(relatorios, out / "diagnostico_samples.json", out / "diagnostico_samples.md")
+    (out / "auditoria_extracao.json").write_text(json.dumps(auditoria, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"arquivos": len(relatorios), "questoes": sum(r["total_questoes"] for r in relatorios), "extraidos": sum(r["respostas_extraidas"] for r in relatorios), "vinculados": sum(r["respostas_vinculadas"] for r in relatorios)}, ensure_ascii=False, indent=2))
 
 

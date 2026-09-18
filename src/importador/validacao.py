@@ -3,9 +3,46 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import re
 
 
 GABARITOS_VALIDOS = frozenset({"A", "B", "C", "D", "E", "CERTO", "ERRADO", "ANULADA", "X"})
+
+
+def inicio_suspeito(enunciado: str) -> bool:
+    """Minúscula após aspas/pontuação é alerta, nunca motivo para cortar texto."""
+    texto = (enunciado or "").lstrip(" \n\r\t\"'“”‘’([{—–-…")
+    return bool(texto and texto[0].islower())
+
+
+def problemas_estrutura(questao: dict) -> list[str]:
+    problemas = []
+    texto = questao.get('enunciado') or ''
+    if not texto.strip():
+        problemas.append('Enunciado vazio')
+    if questao.get('gabarito') and normalizar_gabarito(questao['gabarito'], questao.get('tipo')) is None:
+        problemas.append('Gabarito incompatível com o tipo da questão')
+    if re.search(r'\b(?:alternativa que|afirmação que)\s*$', texto, re.I):
+        problemas.append('Comando aparentemente incompleto')
+    alternativas = questao.get('alternativas') or []
+    if questao.get('tipo') == 'multipla_escolha':
+        letras = sorted(a['letra'] for a in alternativas if a.get('texto', '').strip())
+        if len(letras) < 2 or letras != list('ABCDE'[:len(letras)]):
+            problemas.append('Alternativas ausentes ou com letras repetidas')
+        if questao.get('gabarito') in set('ABCDE') and questao.get('gabarito') not in letras:
+            problemas.append('Alternativa do gabarito ausente')
+        def marcador_fundido(t):
+            for m in re.finditer(r'\s[b-eB-E]\)\s+\S', t):
+                prefixo = t[:m.start()]
+                if prefixo.count('(') <= prefixo.count(')'):
+                    return True
+            return False
+        if any(marcador_fundido(a.get('texto', '')) for a in alternativas):
+            problemas.append('Possíveis alternativas fundidas')
+    if any(re.search(r'TIPO\s+\w+\s*[–—-]\s*P[ÁA]GINA\s+\d+', t, re.I)
+           for t in [texto] + [a.get('texto', '') for a in alternativas]):
+        problemas.append('Rodapé misturado ao conteúdo')
+    return problemas
 
 
 def normalizar_gabarito(valor: str | None, tipo: str | None = None) -> str | None:
@@ -21,7 +58,7 @@ def normalizar_gabarito(valor: str | None, tipo: str | None = None) -> str | Non
         return "Certo"
     if token in {"ERRADO", "E"} and tipo == "certo_errado":
         return "Errado"
-    if token in {"A", "B", "C", "D", "E"}:
+    if token in {"A", "B", "C", "D", "E"} and tipo != "certo_errado":
         return token
     return None
 
@@ -44,7 +81,8 @@ def associar_gabaritos(questoes: list[dict], gabaritos: dict[int, str], *, confi
     extras = sorted(set(int(n) for n in gabaritos) - set(por_numero))
     faltantes = sorted(set(por_numero) - set(int(n) for n in gabaritos))
     vinculados = 0
-    conflitos = []
+    conflitos = list(getattr(gabaritos, 'conflitos', ()))
+    incompativeis = []
     for numero, resposta in gabaritos.items():
         numero = int(numero)
         itens = por_numero.get(numero, [])
@@ -52,7 +90,12 @@ def associar_gabaritos(questoes: list[dict], gabaritos: dict[int, str], *, confi
             continue
         questao = itens[0]
         normalizada = normalizar_gabarito(resposta, questao.get("tipo"))
-        if normalizada is None:
+        alternativas = questao.get('alternativas')
+        ausente = (questao.get('tipo') == 'multipla_escolha' and alternativas is not None
+                   and normalizada != 'Anulada'
+                   and normalizada not in {a.get('letra') for a in alternativas if a.get('texto', '').strip()})
+        if normalizada is None or ausente:
+            incompativeis.append(numero)
             continue
         anterior = questao.get("gabarito")
         if anterior and questao.get("gabarito_confianca") == "alta" and confianca != "alta":
@@ -63,8 +106,10 @@ def associar_gabaritos(questoes: list[dict], gabaritos: dict[int, str], *, confi
         questao["gabarito"] = normalizada
         questao["gabarito_confianca"] = confianca
         vinculados += 1
+    faltantes = sorted(set(faltantes) | set(incompativeis))
     return {"extraidos": len(gabaritos), "vinculados": vinculados, "faltantes": faltantes,
             "extras": extras, "duplicados": duplicados, "conflitos": sorted(conflitos),
+            "incompativeis": sorted(incompativeis),
             "revisao_manual": bool(faltantes or extras or duplicados or conflitos)}
 
 
@@ -76,12 +121,10 @@ def validar_gabarito(
     quantidade_esperada: int | None = None,
 ) -> dict:
     """Retorna evidências e pendências sem aplicar respostas ao banco."""
-    numeros = [int(q.get("numero", i)) for i, q in enumerate(questoes, 1)]
-    numeros_unicos = set(numeros)
-    gabarito_numeros = set(gabaritos)
-    faltantes = sorted(numeros_unicos - gabarito_numeros)
-    extras = sorted(gabarito_numeros - numeros_unicos)
-    duplicados = sorted({n for n in numeros if numeros.count(n) > 1})
+    associacao = associar_gabaritos([dict(q) for q in questoes], gabaritos)
+    faltantes = associacao['faltantes']
+    extras = associacao['extras']
+    duplicados = associacao['duplicados']
     motivos = []
     if not cargo_encontrado:
         motivos.append("cargo_nao_encontrado")
@@ -93,6 +136,10 @@ def validar_gabarito(
         motivos.append("gabaritos_faltantes")
     if extras:
         motivos.append("gabaritos_extras")
+    if associacao['incompativeis']:
+        motivos.append('gabaritos_incompativeis')
+    if associacao['conflitos']:
+        motivos.append('gabaritos_conflitantes')
     return {
         "valido": not motivos,
         "questoes": len(questoes),
@@ -100,6 +147,8 @@ def validar_gabarito(
         "faltantes": faltantes,
         "extras": extras,
         "duplicados": duplicados,
+        "incompativeis": associacao['incompativeis'],
+        "conflitos": associacao['conflitos'],
         "motivos": motivos,
         "revisao_manual": bool(motivos),
     }

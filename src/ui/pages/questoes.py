@@ -1,13 +1,16 @@
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+    QComboBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget,
 )
 
+from src.ui.components.question_editor import QuestionEditor
+
 import src.models.questoes_repo as repo
+from src.importador.validacao import problemas_estrutura
 
 
 logger = logging.getLogger(__name__)
@@ -16,57 +19,80 @@ logger = logging.getLogger(__name__)
 class QuestaoDialog(QDialog):
     def __init__(self, questao_dados=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Nova Questão" if not questao_dados else "Editar Questão")
-        self.resize(500, 600)
-        self.questao_id = questao_dados.get("id") if questao_dados else None
-        layout = QFormLayout(self)
-
-        self.enunciado_input = QTextEdit()
-        if questao_dados: self.enunciado_input.setText(questao_dados.get("enunciado", ""))
-        layout.addRow("Enunciado:", self.enunciado_input)
-        self.tipo_combo = QComboBox(); self.tipo_combo.addItems(["multipla_escolha", "certo_errado"])
-        if questao_dados: self.tipo_combo.setCurrentText(questao_dados.get("tipo", "multipla_escolha"))
-        layout.addRow("Tipo:", self.tipo_combo)
-        self.disciplina_input = QComboBox(); self.disciplina_input.setEditable(True)
-        if questao_dados: self.disciplina_input.setCurrentText(questao_dados.get("disciplina", ""))
-        layout.addRow("Disciplina:", self.disciplina_input)
-        self.topico_input = QComboBox(); self.topico_input.setEditable(True)
-        if questao_dados: self.topico_input.setCurrentText(questao_dados.get("topico", ""))
-        layout.addRow("Tópico:", self.topico_input)
-        self.banca_input = QComboBox(); self.banca_input.setEditable(True)
-        if questao_dados: self.banca_input.setCurrentText(questao_dados.get("banca", ""))
-        layout.addRow("Banca:", self.banca_input)
-        self.ano_input = QLineEdit()
-        if questao_dados and questao_dados.get("ano"): self.ano_input.setText(str(questao_dados["ano"]))
-        layout.addRow("Ano:", self.ano_input)
-        self.dificuldade_combo = QComboBox(); self.dificuldade_combo.addItems(["facil", "media", "dificil"])
-        if questao_dados: self.dificuldade_combo.setCurrentText(questao_dados.get("dificuldade", "media"))
-        layout.addRow("Dificuldade:", self.dificuldade_combo)
-        self.gabarito_input = QComboBox(); self.gabarito_input.addItems(["A", "B", "C", "D", "E", "Certo", "Errado"])
-        if questao_dados: self.gabarito_input.setCurrentText(questao_dados.get("gabarito", "A"))
-        layout.addRow("Gabarito:", self.gabarito_input)
-        buttons = QHBoxLayout(); salvar_btn = QPushButton("Salvar"); salvar_btn.clicked.connect(self.salvar); buttons.addWidget(salvar_btn)
+        self.setWindowTitle("Editar questão" if questao_dados else "Nova questão")
+        self.resize(620, 660)
+        self.questao_id = (questao_dados or {}).get("id")
+        self._dirty = False
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        titulo = QLabel(self.windowTitle())
+        titulo.setObjectName("page-title")
+        layout.addWidget(titulo)
+        self.editor = QuestionEditor()
+        self.editor.load(questao_dados or {})
+        self.editor.changed.connect(self._alterado)
+        layout.addWidget(self.editor, 1)
+        # Os consumidores existentes continuam usando os mesmos campos públicos.
+        for nome in ("enunciado_input", "tipo_combo", "disciplina_input", "topico_input",
+                     "banca_input", "ano_input", "dificuldade_combo", "gabarito_input", "alternativas_input"):
+            setattr(self, nome, getattr(self.editor, nome))
+        footer = QHBoxLayout()
         if self.questao_id:
-            excluir_btn = QPushButton("Excluir"); excluir_btn.setObjectName("danger-button"); excluir_btn.clicked.connect(self.excluir); buttons.addWidget(excluir_btn)
-        layout.addRow(buttons)
+            excluir = QPushButton("Excluir questão")
+            excluir.setObjectName("danger-button")
+            excluir.clicked.connect(self.excluir)
+            footer.addWidget(excluir)
+        footer.addStretch()
+        cancelar = QPushButton("Cancelar")
+        cancelar.setObjectName("secondary-button")
+        cancelar.clicked.connect(self.reject)
+        footer.addWidget(cancelar)
+        self.salvar_btn = QPushButton("Salvar questão")
+        self.salvar_btn.clicked.connect(self.salvar)
+        footer.addWidget(self.salvar_btn)
+        layout.addLayout(footer)
+
+    def _alterado(self):
+        self._dirty = True
+
+    def reject(self):
+        if self._dirty and QMessageBox.question(self, "Descartar alterações?",
+                "Há alterações não salvas. Deseja descartá-las?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        super().reject()
 
     def salvar(self):
-        dados = {
-            "enunciado": self.enunciado_input.toPlainText(), "tipo": self.tipo_combo.currentText(),
-            "disciplina": self.disciplina_input.currentText(), "topico": self.topico_input.currentText(),
-            "banca": self.banca_input.currentText(), "ano": int(self.ano_input.text()) if self.ano_input.text().isdigit() else None,
-            "dificuldade": self.dificuldade_combo.currentText(), "gabarito": self.gabarito_input.currentText(),
-        }
-        if self.questao_id: repo.atualizar_questao(self.questao_id, dados)
-        else: repo.criar_questao(dados)
-        logger.info("Questão %s salva", self.questao_id or "nova")
+        try:
+            dados = self.editor.data(validate=True)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Revise a questão", str(exc))
+            return
+        self.salvar_btn.setEnabled(False)
+        try:
+            if self.questao_id:
+                repo.atualizar_questao(self.questao_id, dados)
+            else:
+                self.questao_id = repo.criar_questao(dados)
+        except Exception:
+            logger.exception("Falha ao salvar questão")
+            QMessageBox.critical(self, "Não foi possível salvar", "Suas alterações continuam no formulário. Tente novamente.")
+            self.salvar_btn.setEnabled(True)
+            return
+        self._dirty = False
         self.accept()
 
     def excluir(self):
-        if QMessageBox.question(self, "Confirmar", "Deseja excluir esta questão?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+        if QMessageBox.question(self, "Excluir questão?", "A questão será removida do acervo ativo. O histórico será preservado.",
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
             repo.excluir_questao(self.questao_id)
-            logger.info("Questão %s excluída logicamente", self.questao_id)
-            self.accept()
+        except Exception:
+            logger.exception("Falha ao excluir questão")
+            QMessageBox.critical(self, "Não foi possível excluir", "Tente novamente.")
+            return
+        self._dirty = False
+        self.accept()
 
 
 class QuestoesPage(QWidget):
@@ -81,31 +107,66 @@ class QuestoesPage(QWidget):
         subtitulo.setObjectName("page-subtitle")
         layout.addWidget(titulo)
         layout.addWidget(subtitulo)
+        self.filtro_gabarito = QComboBox()
+        self.filtro_gabarito.addItems(["Todas as questões", "Sem gabarito", "Com gabarito", "Anuladas", "Problemas de extração"])
+        self.filtro_gabarito.currentIndexChanged.connect(self.carregar_dados)
         top = QHBoxLayout()
         top.setSpacing(10)
         self.busca_input = QLineEdit()
         self.busca_input.setObjectName("search-input")
         self.busca_input.setPlaceholderText("Buscar no enunciado...")
         self.busca_input.setClearButtonEnabled(True)
-        self.busca_input.textChanged.connect(self.carregar_dados)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self.carregar_dados)
+        self.busca_input.textChanged.connect(lambda: self._search_timer.start())
         btn_nova = QPushButton("+ Nova questão")
         btn_nova.setObjectName("primary-action")
         btn_nova.clicked.connect(self.abrir_nova_questao)
         top.addWidget(self.busca_input); top.addWidget(btn_nova); layout.addLayout(top)
-        self.tabela = QTableWidget(); self.tabela.setColumnCount(6); self.tabela.setHorizontalHeaderLabels(["ID", "Enunciado", "Disciplina", "Banca", "Ano", "Dificuldade"])
-        self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.setSelectionBehavior(QTableWidget.SelectRows); self.tabela.setEditTriggers(QTableWidget.NoEditTriggers); self.tabela.setAlternatingRowColors(True); self.tabela.setShowGrid(False); self.tabela.verticalHeader().setVisible(False); self.tabela.verticalHeader().setDefaultSectionSize(48); self.tabela.doubleClicked.connect(self.abrir_edicao_questao)
-        layout.addWidget(self.tabela); self.carregar_dados()
+        linha = QHBoxLayout()
+        self.contagem = QLabel()
+        self.contagem.setObjectName("section-hint")
+        linha.addWidget(self.contagem, 1)
+        linha.addWidget(self.filtro_gabarito)
+        layout.addLayout(linha)
+        self.tabela = QTableWidget(); self.tabela.setColumnCount(6); self.tabela.setHorizontalHeaderLabels(["ID", "Enunciado", "Disciplina", "Banca", "Ano", "Gabarito"])
+        self.tabela.setObjectName("question-bank-table"); self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.setSelectionBehavior(QTableWidget.SelectRows); self.tabela.setEditTriggers(QTableWidget.NoEditTriggers); self.tabela.setAlternatingRowColors(True); self.tabela.setShowGrid(False); self.tabela.verticalHeader().setVisible(False); self.tabela.verticalHeader().setDefaultSectionSize(48); self.tabela.doubleClicked.connect(self.abrir_edicao_questao)
+        layout.addWidget(self.tabela)
+        self.empty = QLabel("Nenhuma questão encontrada. Altere a busca ou importe um caderno.")
+        self.empty.setObjectName("empty-state")
+        self.empty.setWordWrap(True)
+        layout.addWidget(self.empty)
+        self.carregar_dados()
 
     def showEvent(self, event):
         super().showEvent(event)
         self.carregar_dados()
 
     def carregar_dados(self):
-        questoes = repo.buscar_questoes(texto=self.busca_input.text()); self.tabela.setRowCount(len(questoes))
+        questoes = repo.buscar_questoes(texto=self.busca_input.text())
+        filtro = self.filtro_gabarito.currentIndex()
+        if filtro == 1:
+            questoes = [q for q in questoes if not q.get("gabarito")]
+        elif filtro == 2:
+            questoes = [q for q in questoes if q.get("gabarito") and q["gabarito"] != "Anulada"]
+        elif filtro == 3:
+            questoes = [q for q in questoes if q.get("gabarito") == "Anulada"]
+        elif filtro == 4:
+            questoes = [q for q in questoes if problemas_estrutura(q)]
+        self.contagem.setText(f"{len(questoes)} questões · clique duas vezes para editar")
+        self.empty.setVisible(not questoes)
+        self.tabela.setRowCount(len(questoes))
         for row, q in enumerate(questoes):
-            valores = [q["id"], q["enunciado"][:50] + "..." if len(q["enunciado"]) > 50 else q["enunciado"], q["disciplina"] or "", q["banca"] or "", str(q["ano"]) if q["ano"] else "", q["dificuldade"] or ""]
+            valores = [q["id"], q["enunciado"][:50] + "..." if len(q["enunciado"]) > 50 else q["enunciado"], q["disciplina"] or "", q["banca"] or "", str(q["ano"]) if q["ano"] else "", q.get("gabarito") or "Sem gabarito"]
             for col, valor in enumerate(valores): self.tabela.setItem(row, col, QTableWidgetItem(str(valor)))
             self.tabela.item(row, 0).setData(Qt.UserRole, q)
+            self.tabela.item(row, 1).setToolTip(q["enunciado"])
+        self.tabela.setColumnWidth(0, 48)
+        self.tabela.setColumnWidth(4, 70)
+        for col in (2, 3, 5):
+            self.tabela.setColumnWidth(col, 100)
 
     def abrir_nova_questao(self):
         if QuestaoDialog(parent=self).exec(): self.carregar_dados()

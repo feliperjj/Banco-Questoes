@@ -1,4 +1,5 @@
 import logging
+from src.ui.components.statement import formatar_enunciado
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
@@ -82,6 +83,9 @@ class ExecucaoProvaPage(QWidget):
         self.alternativas_scroll.setMinimumHeight(76)
         self.alternativas_scroll.setMaximumHeight(360)
         self.alternativas_scroll.setWidget(self.alternativas_frame)
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.timeout.connect(self._reiniciar_rolagem)
         cartao_layout.addWidget(self.alternativas_scroll)
         self.layout.addWidget(self.cartao_questao, 1)
 
@@ -147,11 +151,12 @@ class ExecucaoProvaPage(QWidget):
         configuracao = repo.obter_prova(prova_id) or {}
         self.tempo_limite_seg = max(0, int(configuracao.get("tempo_limite_min") or 0)) * 60
         self.lbl_info.setText(f"{nome_prova}  ·  {len(self.questoes)} questões")
-        self.idx_atual = 0
-        self.respostas_memoria = {}
-        self.tempo_gasto = 0
+        progresso = repo.obter_progresso(self.tentativa_id)
+        self.idx_atual = min(progresso["indice"], len(self.questoes) - 1)
+        self.respostas_memoria = progresso["respostas"]
+        self.tempo_gasto = progresso["tempo_seg"]
         self.em_andamento = True
-        self.lbl_tempo.setText("00:00")
+        self.lbl_tempo.setText(f"{self.tempo_gasto // 60:02d}:{self.tempo_gasto % 60:02d}")
         self.barra_progresso.setRange(0, len(self.questoes))
         self.timer.start(1000)
         self.btn_finalizar.setEnabled(True)
@@ -160,6 +165,7 @@ class ExecucaoProvaPage(QWidget):
 
     def atualizar_tempo(self):
         self.tempo_gasto += 1
+        self._salvar_progresso()
         self.lbl_tempo.setText(f"{self.tempo_gasto // 60:02d}:{self.tempo_gasto % 60:02d}")
         if self.tempo_limite_seg and self.tempo_gasto >= self.tempo_limite_seg:
             self._finalizar_tentativa_automaticamente()
@@ -180,7 +186,7 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_progresso.setText(f"Questão {numero} de {len(self.questoes)}")
         self.barra_progresso.setValue(numero)
         self.lbl_tipo_questao.setText((q.get("disciplina") or "QUESTÃO").upper())
-        self.lbl_enunciado.setText(q["enunciado"])
+        self.lbl_enunciado.setPlainText(formatar_enunciado(q["enunciado"]))
         self.limpar_alternativas()
         opcoes = [(a["letra"], f"{a['letra']})  {a['texto']}") for a in q.get("alternativas", [])] if q["tipo"] == "multipla_escolha" else [("Certo", "Certo"), ("Errado", "Errado")]
         if not opcoes:
@@ -199,6 +205,7 @@ class ExecucaoProvaPage(QWidget):
             label = QLabel(rotulo)
             label.setObjectName("exam-option-label")
             label.setWordWrap(True)
+            label.setTextFormat(Qt.PlainText)
             label.setMinimumWidth(0)
             label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             label.setTextInteractionFlags(Qt.NoTextInteraction)
@@ -215,9 +222,16 @@ class ExecucaoProvaPage(QWidget):
                 rb.setChecked(True)
             rb.toggled.connect(lambda checked, o=valor, qid=q["id"]: self.salvar_resposta_temp(checked, qid, o))
             rb.toggled.connect(lambda checked, row=option_row: self._marcar_opcao(row, checked))
+            self._marcar_opcao(option_row, rb.isChecked())
         self.alternativas_layout.addStretch(1)
         self.btn_anterior.setEnabled(self.idx_atual > 0)
         self.btn_proxima.setEnabled(self.idx_atual < len(self.questoes) - 1)
+        self.alternativas_scroll.verticalScrollBar().setValue(0)
+        self._scroll_timer.start(0)
+
+    def _reiniciar_rolagem(self):
+        self.alternativas_scroll.verticalScrollBar().setValue(0)
+        self.lbl_enunciado.verticalScrollBar().setValue(0)
 
     @staticmethod
     def _marcar_opcao(row, selecionada):
@@ -235,15 +249,21 @@ class ExecucaoProvaPage(QWidget):
     def salvar_resposta_temp(self, checked, q_id, opcao):
         if checked:
             self.respostas_memoria[q_id] = opcao
+            self._salvar_progresso()
+
+    def _salvar_progresso(self):
+        repo.salvar_progresso(self.tentativa_id, self.respostas_memoria, self.idx_atual, self.tempo_gasto)
 
     def questao_anterior(self):
         if self.idx_atual > 0:
             self.idx_atual -= 1
+            self._salvar_progresso()
             self.mostrar_questao_atual()
 
     def proxima_questao(self):
         if self.idx_atual < len(self.questoes) - 1:
             self.idx_atual += 1
+            self._salvar_progresso()
             self.mostrar_questao_atual()
 
     def confirmar_finalizacao(self):

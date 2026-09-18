@@ -89,6 +89,7 @@ class GeradorProvaPage(QWidget):
         form.addWidget(self.tempo_input, 5, 1)
 
         self.lbl_disponiveis = QLabel()
+        self.lbl_disponiveis.setWordWrap(True)
         self.lbl_disponiveis.setObjectName("generator-availability")
         form.addWidget(self.lbl_disponiveis, 5, 2, 1, 2)
 
@@ -139,6 +140,7 @@ class GeradorProvaPage(QWidget):
         self.prova_cadastrada_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
         self._carregar_provas_cadastradas()
         self._atualizar_modo()
+        self.qtd_input.valueChanged.connect(self._atualizar_disponibilidade)
         self.carregar_provas()
         self._atualizar_disponibilidade()
 
@@ -197,7 +199,11 @@ class GeradorProvaPage(QWidget):
             QMessageBox.warning(self, "Aviso", "Nenhuma questão encontrada com estes filtros. A prova não foi criada.")
         else:
             logger.info("Prova %s criada", prova_id)
-            QMessageBox.information(self, "Sucesso", "Prova gerada com sucesso!")
+            quantidade = len(repo.buscar_questoes_da_prova(prova_id))
+            mensagem = f"Prova gerada com {quantidade} questão(ões)."
+            if quantidade < self.qtd_input.value():
+                mensagem += f" Foram solicitadas {self.qtd_input.value()}, mas apenas {quantidade} estavam aptas com estes filtros."
+            QMessageBox.information(self, "Sucesso", mensagem)
             self.nome_input.clear()
             self.carregar_provas()
 
@@ -261,8 +267,11 @@ class GeradorProvaPage(QWidget):
             filtros["topico"] = topico
         if self.tipo_input.currentData():
             filtros["tipo"] = self.tipo_input.currentData()
-        total = len(repo.buscar_questoes(filtros))
-        self.lbl_disponiveis.setText(f"{total} questão(ões) disponíveis")
+        total = repo.contar_questoes_elegiveis(filtros)
+        disponibilidade = f"{total} questão(ões) disponíveis"
+        if 0 < total < self.qtd_input.value():
+            disponibilidade += f". A prova terá {total} das {self.qtd_input.value()} solicitadas."
+        self.lbl_disponiveis.setText(disponibilidade)
         self.lbl_disponiveis.setProperty("empty", total == 0)
         self.lbl_disponiveis.style().unpolish(self.lbl_disponiveis)
         self.lbl_disponiveis.style().polish(self.lbl_disponiveis)
@@ -279,7 +288,7 @@ class GeradorProvaPage(QWidget):
             quantidade.setTextAlignment(Qt.AlignCenter)
             self.tabela.setItem(row, 2, quantidade)
             concluida = bool(prova.get("concluida"))
-            status = QTableWidgetItem("Concluída" if concluida else "Pendente")
+            status = QTableWidgetItem("Concluída" if concluida else ("Em andamento" if prova.get("em_andamento") else "Pendente"))
             status.setTextAlignment(Qt.AlignCenter)
             status.setData(Qt.UserRole, concluida)
             self.tabela.setItem(row, 3, status)
@@ -290,7 +299,7 @@ class GeradorProvaPage(QWidget):
                 self.tabela.setCellWidget(row, 4, label)
                 continue
 
-            botao = QPushButton("Iniciar prova")
+            botao = QPushButton("Retomar prova" if prova.get("em_andamento") else "Iniciar prova")
             botao.setObjectName("table-action-button")
             botao.setMinimumWidth(132)
             botao.setMaximumWidth(154)

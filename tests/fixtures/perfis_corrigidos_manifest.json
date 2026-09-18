@@ -1,0 +1,117 @@
+[
+  {
+    "arquivo": "samples/administrador-FGV.pdf",
+    "quantidade": 80,
+    "sha256": "6a5647ccc20aa0667d0e2f8bc556b1b45b6219a6d4e93726878b0ac5a289d6d8"
+  },
+  {
+    "arquivo": "samples/agente_de_tecnologia_da_informacao_e_comunicacao_analista_de_sistemas.pdf",
+    "quantidade": 50,
+    "sha256": "46039fcef534cb19ddc8a497ad3efd40b15925952ddea00e707b74b2413e0c58"
+  },
+  {
+    "arquivo": "samples/agente_especializado_analista_de_sistemas.pdf",
+    "quantidade": 60,
+    "sha256": "672b2bf05ccd766f4a928e98e0c10dd2ac68a94b226d358f46ca66a608d0031d"
+  },
+  {
+    "arquivo": "samples/analista_analise_de_sistema_desenvolvimento_de_sistema.pdf",
+    "quantidade": 120,
+    "sha256": "f9d81bfc901b2de2c7e88c127a42c018b5a8eca3dcb72c816eee607abfb955d1"
+  },
+  {
+    "arquivo": "samples/analista_de_planejamento_e_orcamento_especialidade_governanca_e_gestao_de_projetos_de_ti-CEBRASPE.pdf",
+    "quantidade": 100,
+    "sha256": "415e24f4ccd857850c88fd9b6789cde2c397e32dab91b93a158d3cde529f5e79"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/agente_administrativo_auxiliar_i.pdf",
+    "quantidade": 30,
+    "sha256": "22c071c16431ea2396211eb3a825bcf96049a758d3befa0bb65942bcecf85bbb"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/agente_administrativo_i-1.pdf",
+    "quantidade": 25,
+    "sha256": "f407cd0ffc7ff907d7094d55a43e7c9ed836f702e431bb1068a56738b1c38d10"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/agente_administrativo_i-2.pdf",
+    "quantidade": 30,
+    "sha256": "bff50626e73bc78e57c74c5b92bac9d99857faa04736a28cccda279f153d1722"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/agente_administrativo_i-3.pdf",
+    "quantidade": 55,
+    "sha256": "13c10538d0b6dbecad004d64f9bf7f3e5f8e1d65a6068b19d03708f9e1951de4"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/agente_administrativo_i-4.pdf",
+    "quantidade": 40,
+    "sha256": "1b044c89f288d844d839decb56520fc9720c9f935d1e27f71cecbb43e40b8761"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/agente_administrativo_i.pdf",
+    "quantidade": 40,
+    "sha256": "d97c1405191120f5ad9287aed0c5777a2da901e94e7391eefdd6423ceefc8514"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/agente_nivel_superior_analista_de_sistemas.pdf",
+    "quantidade": 40,
+    "sha256": "5f22ce6c2038c344c614ccaf96b83299320c741102c1c07681ada2f7003ac6c5"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/analista_adm_desenvolvimento_sistemas.pdf",
+    "quantidade": 40,
+    "sha256": "deec700448452361173bcad41ed3541dd53574aac6e3d554d04807e1cdadf52d"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/analista_administrativo_iii_analista_de_sistemas.pdf",
+    "quantidade": 80,
+    "sha256": "b599eadcc8708ea30289d6ae7bb1ff96af90ca62bf605b441061f9c711fec384"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/analista_analista_de_sistemas.pdf",
+    "quantidade": 50,
+    "sha256": "62e37b138b86786bf3e379bd6455c15ba3ebde96f389002170065d36ab0238ea"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/analista_area_ciencias_agrarias_subarea_sistemas_de_producao_animal.pdf",
+    "quantidade": 100,
+    "sha256": "149d222bd93afdc60bde92e0e618091bad9f51c416018ecae0435cb6115d9ffc"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/analista_area_ciencias_exatas_e_da_terra_subarea_sistemas_de_informacao.pdf",
+    "quantidade": 100,
+    "sha256": "74b9ed88f04ebb99e8e8886ea41a38257dc16748f2e8e1b74fc43e171cfb92f7"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/analista_area_de_apoio_especializado_tecnologia_da_informacao_desenvolvimento_de_sistemas.pdf",
+    "quantidade": 70,
+    "sha256": "a137ea9ec554e1be6fbf07ae2e53d602a535ecca322a34a2975431fe1958b0c4"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/analista_producao_redes_suporte_de_banco_de_dados_e_suporte_de_sistemas.pdf",
+    "quantidade": 50,
+    "sha256": "d3ad488000f20b19c6bc3ad05865fb9a8dd88344a8dd7ebbc0c1774267fe1b18"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/auditor_fiscal.pdf",
+    "quantidade": 40,
+    "sha256": "966c0ac80a847f88826d2d366b892cf4a1b951d0c2bd50dad4fb43ee02c58f7c"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/prova1_auditor_fiscal.pdf",
+    "quantidade": 45,
+    "sha256": "a6e7a177a354b8d6bfa78975150c62e7d160cb2f1d078069a3ce8e9f4216a8e3"
+  },
+  {
+    "arquivo": "samples/lote_2026_08_22/provas_2e3_auditor_fiscal.pdf",
+    "quantidade": 70,
+    "sha256": "74dae50221377fa58b83dba1fdb66be643933dff0c021d86d0a28fec32d1ce12"
+  },
+  {
+    "arquivo": "samples/TRANSPETRO.pdf",
+    "quantidade": 70,
+    "sha256": "6415ef9973bece434d5bbbb83ad60a1645a1d771154d66ed1badafd02d0d93a1"
+  }
+]

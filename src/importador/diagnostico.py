@@ -12,6 +12,7 @@ MOTIVOS = {
     "codigo_nao_encontrado", "prova_nao_confirmada", "texto_parcial",
     "tabela_nao_reconhecida", "ocr_parcial", "numeracao_divergente",
     "numeros_duplicados", "gabaritos_faltantes", "gabaritos_extras",
+    "gabaritos_incompativeis", "gabaritos_conflitantes",
 }
 
 
@@ -26,11 +27,12 @@ def diagnosticar_caderno(
     metodo="nenhum",
     motivos=None,
 ) -> dict:
-    gabaritos = gabaritos or {}
+    gabaritos = {} if gabaritos is None else gabaritos
     validacao = validar_gabarito(questoes, gabaritos)
     motivos_finais = set(motivos or []) | set(validacao["motivos"])
     motivos_finais = {motivo for motivo in motivos_finais if motivo in MOTIVOS}
     numeros_confirmaveis = {int(q.get("numero", i)) for i, q in enumerate(questoes, 1)} - set(validacao["duplicados"])
+    numeros_confirmaveis -= set(validacao['incompativeis']) | set(validacao['conflitos'])
     respostas_validas = {
         int(numero) for numero, resposta in gabaritos.items()
         if normalizar_gabarito(resposta) is not None or str(resposta).upper() in {"CERTO", "ERRADO"}
