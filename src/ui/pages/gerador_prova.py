@@ -159,9 +159,26 @@ class GeradorProvaPage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._carregar_filtros()
         self._carregar_provas_cadastradas()
         self.carregar_provas()
         self._atualizar_disponibilidade()
+
+    def _carregar_filtros(self):
+        self._recarregar_combo(self.disciplina_input, "Todas as disciplinas", repo.listar_disciplinas())
+        self._recarregar_combo(self.banca_input, "Todas as bancas", repo.listar_bancas())
+        self._recarregar_combo(self.topico_input, "Todas as categorias", repo.listar_topicos())
+
+    @staticmethod
+    def _recarregar_combo(combo, placeholder, valores):
+        selecionado = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(placeholder)
+        combo.addItems(valores)
+        indice = combo.findText(selecionado)
+        combo.setCurrentIndex(indice if indice >= 0 else 0)
+        combo.blockSignals(False)
 
     def gerar_prova(self):
         nome = self.nome_input.text().strip()

@@ -83,6 +83,23 @@ def test_botao_iniciar_prova_mantem_altura_legivel(monkeypatch):
         app.setStyleSheet(estilo_anterior)
 
 
+def test_gerador_atualiza_bancas_ao_voltar_para_tela(monkeypatch):
+    _qapp()
+    bancas = [[]]
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_disciplinas", lambda: [])
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_bancas", lambda: bancas[-1])
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_topicos", lambda: [])
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.contar_questoes_elegiveis", lambda *args, **kwargs: 0)
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_fontes_de_prova", lambda: [])
+    monkeypatch.setattr("src.ui.pages.gerador_prova.repo.listar_provas", lambda **kwargs: [])
+
+    pagina = GeradorProvaPage()
+    bancas.append(["FGV"])
+    pagina.showEvent(None)
+
+    assert pagina.banca_input.findText("FGV") >= 0
+
+
 def test_execucao_finaliza_automaticamente_ao_atingir_limite(tmp_path, monkeypatch):
     _qapp()
     init_db(str(tmp_path / "limite.db"))
