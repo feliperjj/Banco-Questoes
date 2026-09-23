@@ -66,7 +66,9 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 
 ### UI e estado
 
-- A navegação usa os mesmos índices da ordem criada em `MainWindow`: Dashboard 0, Questões 1, Importar 2, Gerar Prova 3, Modo Prova 4, Estatísticas 5, Revisão 6.
+- A navegação usa os mesmos índices da ordem criada em `MainWindow`: Dashboard 0, Questões 1, Importar 2, Gerar Prova 3, Provas importadas 4, Modo Prova 5, Estatísticas 6, Revisão 7.
+- `GeradorProvaPage` gera provas aleatórias; provas cadastradas por importação são iniciadas em `ProvasImportadasPage`, copiando a composição e ordem originais.
+- Lotes antigos sem registro em `ProvaCadastrada` são recuperados pelas pausas maiores que um minuto entre os horários sequenciais de criação; preservar essa regra e a ordem crescente dos IDs ao montar essas provas.
 - Uma página que exibe dados do banco deve recarregar no `showEvent` ou após uma operação que altera os dados.
 - `ExecucaoProvaPage.em_andamento` é a autoridade visual para saber se há tentativa ativa.
 - Estado inativo: timer parado, botão de finalizar desabilitado, navegação desabilitada, alternativas vazias e texto neutro.
