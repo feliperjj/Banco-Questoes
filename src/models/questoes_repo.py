@@ -300,6 +300,123 @@ def listar_provas_cadastradas() -> list[dict]:
     return provas
 
 
+def listar_lotes_importados_sem_prova() -> list[dict]:
+    """Recupera lotes antigos de importação que ainda não tinham vínculo de prova.
+
+    Antes do cadastro de ProvaCadastrada, o banco guardava as questões em sequência,
+    com timestamps gerados durante o salvamento do lote. Uma pausa de mais de um
+    minuto separa lotes antigos sem misturar os metadados das questões.
+    """
+    init_db()
+    vinculadas = (
+        ProvaCadastradaQuestao.select(ProvaCadastradaQuestao.questao)
+        .join(ProvaCadastrada)
+        .where(ProvaCadastrada.ativa == True)
+    )
+    questoes = list(
+        Questao.select().where(
+            (Questao.ativa == True) & ~Questao.id.in_(vinculadas)
+        ).order_by(Questao.id)
+    )
+    lotes_brutos = []
+    lote_atual = []
+    anterior = None
+
+    for questao in questoes:
+        criada_em = questao.criada_em
+        if isinstance(criada_em, str):
+            try:
+                criada_em = datetime.datetime.fromisoformat(criada_em)
+            except ValueError:
+                criada_em = None
+        if (
+            lote_atual
+            and anterior is not None
+            and criada_em is not None
+            and (criada_em - anterior).total_seconds() > 60
+        ):
+            if len(lote_atual) > 1:
+                lotes_brutos.append(lote_atual)
+            lote_atual = []
+        lote_atual.append(questao)
+        anterior = criada_em
+    if len(lote_atual) > 1:
+        lotes_brutos.append(lote_atual)
+
+    lotes = []
+    for questoes_lote in lotes_brutos:
+        bancas = {q.banca.strip() for q in questoes_lote if q.banca and q.banca.strip()}
+        anos = {q.ano for q in questoes_lote if q.ano}
+        partes_nome = []
+        if len(bancas) == 1:
+            partes_nome.append(next(iter(bancas)))
+        if len(anos) == 1:
+            partes_nome.append(str(next(iter(anos))))
+        if not partes_nome:
+            criada_em = questoes_lote[0].criada_em
+            if isinstance(criada_em, str):
+                try:
+                    criada_em = datetime.datetime.fromisoformat(criada_em)
+                except ValueError:
+                    criada_em = None
+            data = criada_em.strftime("%d/%m/%Y") if criada_em else "lote antigo"
+            partes_nome.append(f"Prova importada · {data}")
+
+        avaliaveis = sum(q.gabarito in GABARITOS_AVALIAVEIS for q in questoes_lote)
+        questao_ids = [q.id for q in questoes_lote]
+        lotes.append(
+            {
+                "id": questao_ids[0],
+                "origem_tipo": "lote_importado",
+                "nome": " · ".join(partes_nome),
+                "qtd_questoes": len(questoes_lote),
+                "qtd_avaliaveis": avaliaveis,
+                "pronta": len(questoes_lote) == avaliaveis,
+                "questao_ids": questao_ids,
+                "criada_em": _legacy_value(questoes_lote[0].criada_em),
+            }
+        )
+    return list(reversed(lotes))
+
+
+def criar_prova_a_partir_de_questoes(
+    nome: str, questao_ids: list[int], tempo_limite_min: int = 0
+) -> int:
+    """Cria uma prova executável a partir da composição de um lote importado legado."""
+    init_db()
+    ids = list(dict.fromkeys(questao_ids or []))
+    if not ids:
+        raise ValueError("A prova importada não possui questões.")
+    encontradas = list(
+        Questao.select(Questao.id, Questao.ativa, Questao.gabarito).where(
+            Questao.id.in_(ids)
+        )
+    )
+    por_id = {questao.id: questao for questao in encontradas}
+    if len(por_id) != len(ids):
+        raise ValueError("Uma ou mais questões da prova importada não existem mais.")
+    indisponiveis = [
+        qid
+        for qid in ids
+        if not por_id[qid].ativa or por_id[qid].gabarito not in GABARITOS_AVALIAVEIS
+    ]
+    if indisponiveis:
+        raise ValueError(
+            f"A prova importada possui {len(indisponiveis)} questão(ões) "
+            "sem gabarito avaliável ou inativas."
+        )
+    configuracao = {
+        "modo": "prova_importada_lote",
+        "lote_importacao_id": ids[0],
+        "_tempo_limite_min": max(0, int(tempo_limite_min or 0)),
+    }
+    with db.atomic():
+        prova = Prova.create(nome=nome, filtros=json.dumps(configuracao))
+        for ordem, qid in enumerate(ids, 1):
+            ProvaQuestao.create(prova=prova.id, questao=qid, ordem=ordem)
+    return prova.id
+
+
 def listar_fontes_de_prova() -> list[dict]:
     """Lista provas importadas e provas já geradas que podem ser reutilizadas."""
     fontes = [dict(prova, origem_tipo="cadastrada", origem_id=prova["id"])

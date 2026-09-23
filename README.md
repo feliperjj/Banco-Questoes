@@ -31,8 +31,8 @@ O objetivo não é fingir que todo PDF possui o mesmo formato. O objetivo é aut
 - Aplicação de gabarito e classificação por intervalos.
 - Edição e exclusão lógica de questões.
 - Busca por enunciado, disciplina, categoria, banca e tipo.
-- Geração de provas aleatórias com filtros e limite de tempo.
-- Cadastro de provas importadas com seus gabaritos e reutilização da composição original.
+- Geração de provas aleatórias em uma tela própria, com filtros e limite de tempo.
+- Lista separada de provas importadas, com indicação de gabarito pronto e acesso direto para resolvê-las na ordem original.
 - Execução com timer, alternativas responsivas e proteção contra finalização duplicada.
 - Histórico de provas concluídas, estatísticas e revisão espaçada.
 - Banco local, sem necessidade de servidor.
@@ -53,8 +53,8 @@ O caderno explica por que as decisões foram tomadas. O cérebro operacional dev
 3. Se houver gabarito, selecione o PDF correspondente ou cole a sequência de respostas.
 4. Classifique blocos por disciplina e categoria quando o PDF não trouxer esses metadados.
 5. Informe o nome da prova e salve o lote; a prova e o gabarito ficam disponíveis para reutilização.
-6. Em **Gerar Prova**, escolha entre questões aleatórias ou uma prova cadastrada/anexada.
-7. Defina o limite de tempo e inicie a prova.
+6. Em **Gerar Prova**, monte simulados com questões aleatórias e filtros do banco.
+7. Em **Provas importadas**, escolha uma prova pronta para resolver a composição original.
 8. Resolva a prova e confira resultado, estatísticas e revisão.
 
 Se o gabarito puder ser colado manualmente:

@@ -5,6 +5,7 @@ from src.ui.pages.execucao_prova import ExecucaoProvaPage
 from src.ui.pages.estatisticas import EstatisticasPage
 from src.ui.pages.gerador_prova import GeradorProvaPage
 from src.ui.pages.importacao import ImportacaoPage
+from src.ui.pages.provas_importadas import ProvasImportadasPage
 from src.ui.pages.questoes import QuestoesPage
 from src.ui.pages.revisao import RevisaoPage
 
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
             "Questões": QuestoesPage(),
             "Importar": ImportacaoPage(),
             "Gerar Prova": GeradorProvaPage(),
+            "Provas importadas": ProvasImportadasPage(),
             "Modo prova": ExecucaoProvaPage(),
             "Estatísticas": EstatisticasPage(),
             "Revisão": RevisaoPage(),
