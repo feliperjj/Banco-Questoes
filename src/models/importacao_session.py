@@ -44,6 +44,7 @@ class ImportacaoSession:
     questoes: list[dict] = field(default_factory=list)
     salvas: dict[int, int] = field(default_factory=dict)
     caminho: str = ""
+    instrucoes_prova: str = ""
     estado: EstadoImportacao = EstadoImportacao.VAZIO
 
     @property
@@ -54,6 +55,7 @@ class ImportacaoSession:
         self.questoes = deepcopy(questoes)
         self.salvas.clear()
         self.caminho = caminho
+        self.instrucoes_prova = getattr(questoes, "instrucoes_prova", "")
         self.restaurar_estado()
 
     def restaurar_estado(self):

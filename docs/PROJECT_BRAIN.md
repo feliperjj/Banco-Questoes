@@ -37,6 +37,7 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 ### Banco e repositório
 
 - `init_db()` deve criar as tabelas de `ALL_MODELS` sem apagar dados.
+- `Questao.texto_apoio` mantém passagens compartilhadas separadas do enunciado; `ProvaCadastrada.instrucoes_prova` guarda as orientações gerais da prova de origem.
 - A chamada `init_db(caminho_temporario)` é usada pelos testes; não deixar o caminho global preso ao banco de produção entre testes.
 - `criar_questao` e `criar_questoes_em_lote` devem salvar alternativas dentro da mesma transação da questão.
 - `listar_provas()` sem argumentos significa provas iniciáveis/pendentes.
@@ -52,6 +53,7 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 ### Parser e importador
 
 - A saída de `parsear_questoes` precisa conter, no mínimo: `enunciado`, `tipo`, `alternativas`, `gabarito`, `confianca`, `disciplina`, `topico`, `banca` e `ano`.
+- Texto-base compartilhado fica em `texto_apoio` e orientações gerais em `instrucoes_prova`; nenhum dos dois deve ser concatenado ao campo `enunciado`. Quando o limite não for seguro, mantenha o bloco separado para conferência.
 - `tipo` só pode ser `multipla_escolha` ou `certo_errado`.
 - Alternativa de múltipla escolha tem `letra` e `texto`; não descartar alternativas por causa de quebra de linha.
 - Marcadores de texto-base, paginação, cabeçalho, rodapé e grade de respostas não podem virar questões.
@@ -75,6 +77,7 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 - Ao finalizar: salvar tentativa, exibir resultado, limpar enunciado/alternativas/timer e voltar ao gerador.
 - Ao voltar à aba de execução sem tentativa ativa, não reutilizar conteúdo da prova anterior.
 - Questões ou alternativas longas devem quebrar linha e rolar dentro do cartão; nunca impor largura mínima maior que a tela.
+- Texto de apoio e instruções gerais aparecem em áreas próprias no modo prova e nunca devem ser concatenados ao enunciado.
 - A janela deve iniciar com o Dashboard selecionado e respeitar o mínimo de 960×640.
 - A tela de importação deve permanecer utilizável em 960×640, sem rolagem horizontal no formulário de revisão.
 - O botão `table-action-button` deve manter pelo menos 132 px de largura e 40 px reais de altura. A linha de prova usa 60 px e o seletor específico `QTableWidget#exam-table::item` não pode herdar padding vertical que comprima o widget.
@@ -302,3 +305,12 @@ em expressão lógica. Referência atual: `perfis_corrigidos_manifest.json`, com
 as duas anteriores preservadas. Detalhes: `RELATORIO_CORRECAO_LACUNAS.md` e
 `reports/auditoria_lacunas.json`. Fidelidade de imagens/diagramas não é garantida
 por contagem completa. Não houve limpeza ou regravação automática do banco.
+
+### 2026-09-24 — Recortes de elementos visuais
+
+Na importação normal de PDFs, questões que citam figuras, gráficos, tabelas ou
+quadros recebem um recorte contextual do trecho relevante, em vez da página
+inteira. O recorte usa o texto da referência e os limites da questão/coluna;
+figuras complexas ainda exigem conferência na fonte. Os arquivos são gravados
+com sufixo `_crop` para não substituir imagens antigas já referenciadas pelo
+banco local.

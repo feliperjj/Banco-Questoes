@@ -16,6 +16,7 @@ class BaseModel(Model):
 class Questao(BaseModel):
     id = AutoField()
     enunciado = TextField()
+    texto_apoio = TextField(null=True)
     tipo = TextField()
     disciplina = TextField(null=True)
     topico = TextField(null=True)
@@ -51,6 +52,7 @@ class ProvaCadastrada(BaseModel):
     nome = TextField()
     arquivo_questoes = TextField(null=True)
     arquivo_gabarito = TextField(null=True)
+    instrucoes_prova = TextField(null=True)
     ativa = BooleanField(default=True)
     criada_em = DateTimeField(default=datetime.datetime.now)
 

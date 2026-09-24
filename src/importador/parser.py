@@ -43,6 +43,97 @@ _DISCIPLINAS = (
 _SECAO_CONTAGEM = re.compile(r"\s*\|\s*\d+\s*quest(?:ão|ões|ao|oes|�o|�es).*$", re.IGNORECASE)
 
 
+class QuestoesExtraidas(list):
+    """Lista compatível com consumidores antigos, com partes compartilhadas da prova."""
+
+    def __init__(self, questoes=(), *, instrucoes_prova=""):
+        super().__init__(questoes)
+        self.instrucoes_prova = instrucoes_prova
+
+
+def _associar_textos_linguas(texto: str, questoes: list[dict]) -> None:
+    """Liga passagens de inglês/espanhol aos itens que as citam no caderno.
+
+    Alguns cadernos CEBRASPE não declaram um intervalo numérico: colocam a
+    passagem sob o título da disciplina e, em seguida, dizem para julgar os
+    itens seguintes. O próximo título de disciplina encerra esse grupo.
+    """
+    numeros = {int(q.get("numero", 0)) for q in questoes}
+    secoes = (
+        ("língua inglesa", r"(?im)^\s*L[ÍI]NGUA\s+INGLESA\s*$", r"(?im)^\s*L[ÍI]NGUA\s+ESPANHOLA\s*$"),
+        ("língua espanhola", r"(?im)^\s*L[ÍI]NGUA\s+ESPANHOLA\s*$", r"(?im)^\s*DIREITO\s+P[ÚU]BLICO\s*$"),
+    )
+    for _, inicio_re, fim_re in secoes:
+        inicio = re.search(inicio_re, texto)
+        if not inicio:
+            continue
+        fim = re.search(fim_re, texto[inicio.end():])
+        final = inicio.end() + fim.start() if fim else len(texto)
+        secao = texto[inicio.start():final]
+        comando = re.search(
+            r"(?is)(?:judge\s+the\s+following\s+items|"
+            r"juzgue\s+los\s+siguientes\s+[íi]tems)\s*[.:]?",
+            secao,
+        )
+        if not comando:
+            continue
+        itens = secao[comando.end():]
+        marcadores = [
+            m for m in re.finditer(r"(?im)^\s*0*(\d{1,3})[.)]?\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ])", itens)
+            if int(m.group(1)) in numeros
+        ]
+        if not marcadores:
+            continue
+        suporte = secao[:comando.end()].strip()
+        if len(suporte) < 120:
+            continue
+        faixa = {int(m.group(1)) for m in marcadores}
+        for questao in questoes:
+            if int(questao.get("numero", 0)) in faixa:
+                questao["texto_apoio"] = suporte
+
+
+def _separar_contexto_inicial(texto: str) -> tuple[str, str, str]:
+    """Separa instruções reconhecíveis do texto que pode servir de apoio.
+
+    O prefixo só é classificado como instrução quando contém vários itens
+    numerados e vocabulário típico de orientação ao candidato. O restante fica
+    como texto de apoio para ser associado às questões que o referenciam.
+    """
+    if not texto:
+        return "", "", ""
+    linhas = texto.splitlines()
+    itens_numerados = [
+        i for i, linha in enumerate(linhas)
+        if re.match(r"^\s*\d{1,2}\s*[-–—]\s+\S", linha)
+    ]
+    sinais_instrucao = re.search(
+        r"(?i)cart[aã]o[- ]resposta|candidato|fiscal|tempo dispon[ií]vel|"
+        r"ser[aá] eliminado|assinalar uma resposta|lista de presen[çc]a",
+        texto,
+    )
+    instrucoes = ""
+    apoio = texto.strip()
+    disciplina_apoio = ""
+    if len(itens_numerados) >= 3 and sinais_instrucao:
+        posicoes_secao = [
+            i for i, linha in enumerate(linhas)
+            if _disciplina_da_linha(linha.strip())
+        ]
+        # A última linha de disciplina costuma ser o cabeçalho do texto-base
+        # após as instruções gerais (ex.: Conhecimentos Básicos → Língua Portuguesa).
+        secao = posicoes_secao[-1] if posicoes_secao else None
+        if secao is not None and secao > itens_numerados[0]:
+            instrucoes = "\n".join(linhas[:secao]).strip()
+            apoio = "\n".join(linhas[secao + 1:]).strip()
+            disciplina_apoio = _disciplina_da_linha(linhas[secao].strip())
+        elif secao is None:
+            inicio = itens_numerados[0]
+            instrucoes = "\n".join(linhas[inicio:]).strip()
+            apoio = "\n".join(linhas[:inicio]).strip()
+    return instrucoes, apoio, disciplina_apoio
+
+
 def _normalizar_texto(texto: str) -> str:
     texto = unicodedata.normalize("NFKC", texto or "")
     texto = texto.replace("\r\n", "\n").replace("\r", "\n")
@@ -207,7 +298,7 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
     rotulados = textos_rotulados(texto)
     texto = re.sub(r'(?im)\bTIPO\s+\w+\s*[–—-]\s*P[ÁA]GINA\s+\d+[^\n]*', '', texto)
     if not texto:
-        return []
+        return QuestoesExtraidas()
     texto = re.split(r"(?im)^prova\s+discursiva\s*$", texto, maxsplit=1)[0]
     texto_original = texto
     texto = _quebrar_marcadores_inline(texto)
@@ -231,9 +322,26 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
             ocorrencia = re.search(padrao_ancora, texto_questoes, re.IGNORECASE)
             if ocorrencia:
                 contexto_inicial = texto_questoes[:ocorrencia.start()].strip()
-                contexto_inicial = re.sub(r"(?m)^\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-ZÁÉÍÓÚÂÊÔÃÕÇ /-]{1,55}\s*$", "", contexto_inicial).strip()
                 if len(contexto_inicial) < 180 or len(re.findall(r"[.!?](?:\s|$)", contexto_inicial)) < 2:
                     contexto_inicial = ""
+    instrucoes_prova, texto_apoio_inicial, disciplina_apoio = _separar_contexto_inicial(contexto_inicial)
+    if contextos:
+        # A regra de intervalos explícitos também encontra tabelas de
+        # distribuição de pontos. Se o suposto contexto contiver instruções
+        # ao candidato, separe-as antes de associar qualquer texto às questões.
+        contexto_candidato = max(contextos.values(), key=len)
+        instrucoes_contexto, apoio_contexto, disciplina_contexto = _separar_contexto_inicial(contexto_candidato)
+        if instrucoes_contexto:
+            instrucoes_prova = instrucoes_prova or instrucoes_contexto
+            texto_apoio_inicial = apoio_contexto
+            disciplina_apoio = disciplina_contexto or disciplina_apoio
+            contextos = {numero: apoio_contexto for numero in contextos}
+    intervalos_apoio = [
+        tuple(map(int, valores))
+        for valores in re.findall(r"(?<!\d)(\d{1,3})\s+a\s+(\d{1,3})(?!\d)", instrucoes_prova, re.IGNORECASE)
+        if 0 < int(valores[0]) <= int(valores[1]) <= 200
+    ]
+    intervalo_apoio = intervalos_apoio[0] if intervalos_apoio else None
     logger.info("Perfil de importação: %s", resultado.perfil)
     if resultado.aviso:
         logger.warning(resultado.aviso)
@@ -256,12 +364,23 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
         posicao_bloco = texto.find(prefixo_fonte, cursor_fonte)
         if posicao_bloco >= 0:
             cursor_fonte = posicao_bloco + len(prefixo_fonte)
-        enunciado = _juntar_linhas(partes[0])
-        if contexto_inicial and re.search(
-            r"(?i)\b(?:do|no|neste|ao|sobre o|sobre|quanto ao|a partir do|com base no|em relação ao|pelo)\s+texto\b|\bde acordo com (?:o )?texto\b|\btexto\s+(?:a seguir|abaixo|acima|precedente)\b",
-            enunciado,
-        ) and contexto_inicial not in enunciado:
-            enunciado = contexto_inicial + "\n\n" + enunciado
+        # Os extratores geométricos do CEBRASPE já entregam cada item com
+        # delimitadores explícitos. Use-os antes das heurísticas de contexto:
+        # em alguns PDFs o texto-base aparece dentro do bloco da questão e,
+        # sem esta divisão, acaba duplicado no enunciado e no apoio.
+        bloco_conteudo = partes[0]
+        apoio_marcado = re.search(
+            r"(?is)\bTEXTO\s+DE\s+APOIO\b\s*(.*?)\s*\bITEM\s+PARA\s+JULGAMENTO\b\s*(.*)$",
+            bloco_conteudo,
+        )
+        if apoio_marcado:
+            texto_apoio_marcado = _juntar_linhas(apoio_marcado.group(1))
+            enunciado = _juntar_linhas(apoio_marcado.group(2))
+        else:
+            texto_apoio_marcado = ""
+            enunciado = _juntar_linhas(bloco_conteudo)
+        texto_apoio = texto_apoio_marcado or contextos.get(numero_real, "")
+        apoio_inicial_inferido = False
         alternativas = []
         for indice in range(1, len(partes), 2):
             if indice + 1 < len(partes):
@@ -285,14 +404,30 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
             confianca = "alta" if len(enunciado) >= 80 else ("media" if len(enunciado) >= 30 else "baixa")
         if inicio_suspeito(enunciado):
             confianca = "baixa"
-        if numero_real in contextos and contextos[numero_real] not in enunciado:
-            enunciado = contextos[numero_real] + "\n\n" + enunciado
         for referencia in re.findall(r'(?i)\btexto\s+([A-Z0-9]+)\b', enunciado):
             anteriores = [apoio for pos, apoio in rotulados.get(referencia.upper(), []) if pos <= posicao_bloco]
             apoio = anteriores[-1] if anteriores else None
-            if apoio and apoio not in enunciado:
-                enunciado = apoio + "\n\n" + enunciado
+            if apoio and apoio not in texto_apoio:
+                texto_apoio = apoio
+        if not texto_apoio and texto_apoio_inicial:
+            dentro_intervalo = bool(
+                intervalo_apoio and intervalo_apoio[0] <= numero_real <= intervalo_apoio[1]
+            )
+            mesma_disciplina = bool(
+                disciplina_apoio
+                and metadados["disciplinas"].get(numero_real) == disciplina_apoio
+            )
+            # A mera menção a gráfico/tabela/figura não liga o prefixo do PDF
+            # à questão: em cadernos de duas colunas, esse prefixo pode ser um
+            # texto de outra disciplina. Sem intervalo explícito, só associe
+            # quando a disciplina também coincide.
+            associar_apoio = dentro_intervalo if intervalo_apoio else mesma_disciplina
+            if associar_apoio:
+                texto_apoio = texto_apoio_inicial
         avisos = list(avisos_extracao)
+        if apoio_inicial_inferido:
+            confianca = "media" if confianca == "alta" else confianca
+            avisos.append("Texto de apoio associado por referência do enunciado; confira se pertence a esta questão.")
         if resultado.aviso:
             avisos.append(resultado.aviso)
         if re.search(r'(?i)\b(?:figura|gráfico|imagem|tabela)\s+(?:a seguir|abaixo|acima|apresentad)', enunciado):
@@ -306,6 +441,8 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
             "perfil_extracao": perfil_extracao,
             "diagnostico_importacao": list(resultado.diagnostico),
             "enunciado": enunciado,
+            "texto_apoio": texto_apoio,
+            "instrucoes_prova": instrucoes_prova,
             "tipo": tipo,
             "alternativas": alternativas or None,
             "gabarito": None,
@@ -323,5 +460,7 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
     if quantidade_declarada and len(questoes) > quantidade_declarada:
         questoes = questoes[:quantidade_declarada]
 
+    _associar_textos_linguas(texto_original, questoes)
+
     logger.info("Parser identificou %s questões", len(questoes))
-    return questoes
+    return QuestoesExtraidas(questoes, instrucoes_prova=instrucoes_prova)

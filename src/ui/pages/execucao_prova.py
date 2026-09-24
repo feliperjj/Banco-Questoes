@@ -3,8 +3,8 @@ from pathlib import Path
 from src.ui.components.statement import formatar_enunciado
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtGui import QPixmap, QTextBlockFormat, QTextCursor
+from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QToolButton, QVBoxLayout, QWidget
 
 import src.models.questoes_repo as repo
 import src.models.revisao_service as revisao_svc
@@ -60,24 +60,40 @@ class ExecucaoProvaPage(QWidget):
         cartao_layout.setSpacing(14)
         self.lbl_tipo_questao = QLabel("ENUNCIADO")
         self.lbl_tipo_questao.setObjectName("exam-question-kicker")
+        self.lbl_tipo_questao.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         cartao_layout.addWidget(self.lbl_tipo_questao)
+        self._context_sections = {}
+        self._adicionar_secao_contexto(cartao_layout, "texto_apoio", "Texto de apoio")
+        self._adicionar_secao_contexto(cartao_layout, "instrucoes_prova", "Instruções da prova")
+        self.bloco_enunciado = QFrame()
+        self.bloco_enunciado.setObjectName("exam-statement-block")
+        enunciado_layout = QVBoxLayout(self.bloco_enunciado)
+        enunciado_layout.setContentsMargins(16, 12, 16, 14)
+        enunciado_layout.setSpacing(6)
+        self.lbl_enunciado_titulo = QLabel("QUESTÃO")
+        self.lbl_enunciado_titulo.setObjectName("exam-statement-title")
+        enunciado_layout.addWidget(self.lbl_enunciado_titulo)
         self.lbl_enunciado = QTextEdit()
         self.lbl_enunciado.setObjectName("exam-statement")
         self.lbl_enunciado.setReadOnly(True)
         self.lbl_enunciado.setLineWrapMode(QTextEdit.WidgetWidth)
         self.lbl_enunciado.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.lbl_enunciado.setMinimumHeight(90)
+        self.lbl_enunciado.setMinimumHeight(66)
         self.lbl_enunciado.setMaximumHeight(360)
-        cartao_layout.addWidget(self.lbl_enunciado)
+        self.lbl_enunciado.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        enunciado_layout.addWidget(self.lbl_enunciado)
         self.lbl_imagem = QLabel()
         self.lbl_imagem.setObjectName("exam-question-image")
         self.lbl_imagem.setAlignment(Qt.AlignCenter)
         self.lbl_imagem.setMaximumHeight(420)
+        self.lbl_imagem.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.lbl_imagem.hide()
-        cartao_layout.addWidget(self.lbl_imagem)
+        enunciado_layout.addWidget(self.lbl_imagem)
+        cartao_layout.addWidget(self.bloco_enunciado)
         self.alternativas_frame = QFrame()
         self.alternativas_frame.setObjectName("exam-options-card")
         self.alternativas_frame.setMinimumWidth(0)
+        self.alternativas_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.alternativas_layout = QVBoxLayout(self.alternativas_frame)
         self.alternativas_layout.setContentsMargins(12, 10, 12, 10)
         self.alternativas_layout.setSpacing(8)
@@ -90,11 +106,15 @@ class ExecucaoProvaPage(QWidget):
         self.alternativas_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.alternativas_scroll.setMinimumHeight(76)
         self.alternativas_scroll.setMaximumHeight(360)
+        self.alternativas_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.alternativas_scroll.setWidget(self.alternativas_frame)
         self._scroll_timer = QTimer(self)
         self._scroll_timer.setSingleShot(True)
         self._scroll_timer.timeout.connect(self._reiniciar_rolagem)
         cartao_layout.addWidget(self.alternativas_scroll)
+        # O espaço livre deve ficar abaixo das alternativas, sem afastá-las
+        # do enunciado quando a janela é alta.
+        cartao_layout.addStretch(1)
         self.layout.addWidget(self.cartao_questao, 1)
 
         nav = QHBoxLayout()
@@ -125,12 +145,69 @@ class ExecucaoProvaPage(QWidget):
         self.em_andamento = False
         self._mostrar_estado_inicial()
 
+    def _adicionar_secao_contexto(self, parent_layout, field_name, title):
+        section = QFrame()
+        section.setObjectName("exam-context-section")
+        section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(6)
+        toggle = QToolButton()
+        toggle.setObjectName("exam-context-toggle")
+        toggle.setText(title)
+        toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.RightArrow)
+        toggle.setCheckable(True)
+        toggle.setChecked(False)
+        text = QTextEdit()
+        text.setObjectName("exam-context-text")
+        text.setReadOnly(True)
+        text.setLineWrapMode(QTextEdit.WidgetWidth)
+        text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        text.setMinimumHeight(0)
+        text.setMaximumHeight(180)
+        text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        text.hide()
+        toggle.toggled.connect(lambda expanded, button=toggle, editor=text: self._alternar_contexto(button, editor, expanded))
+        section_layout.addWidget(toggle)
+        section_layout.addWidget(text)
+        parent_layout.addWidget(section)
+        self._context_sections[field_name] = (section, toggle, text)
+
+    def _alternar_contexto(self, button, editor, expanded):
+        button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        editor.setVisible(expanded)
+        if expanded:
+            QTimer.singleShot(0, lambda: self._ajustar_altura_texto(editor, 48, 180))
+
+    def _atualizar_contexto(self, questao):
+        for field_name, (section, toggle, editor) in self._context_sections.items():
+            value = questao.get(field_name)
+            available = isinstance(value, str) and bool(value.strip())
+            editor.setPlainText(value.strip() if available else "")
+            self._aplicar_espacamento_leitura(editor)
+            toggle.setChecked(False)
+            section.setVisible(available)
+            editor.setVisible(False)
+            if available:
+                self._ajustar_altura_texto(editor, 48, 180)
+
+    def _limpar_contexto(self):
+        for section, toggle, editor in self._context_sections.values():
+            toggle.setChecked(False)
+            editor.clear()
+            editor.hide()
+            section.hide()
+
     def showEvent(self, event):
         super().showEvent(event)
         # Ao voltar para esta aba depois de finalizar, nunca reutilize o
         # enunciado/alternativas da tentativa anterior.
         if not self.em_andamento:
             self._mostrar_estado_inicial()
+        else:
+            QTimer.singleShot(0, self._ajustar_alturas_conteudo)
 
     def _mostrar_estado_inicial(self):
         self.timer.stop()
@@ -138,6 +215,7 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_progresso.setText("Escolha uma prova para começar")
         self.lbl_tipo_questao.setText("MODO PROVA")
         self.lbl_enunciado.setText("Suas questões aparecerão aqui quando você iniciar uma prova.")
+        self._limpar_contexto()
         self.lbl_imagem.clear()
         self.lbl_imagem.hide()
         self.limpar_alternativas()
@@ -196,7 +274,10 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_progresso.setText(f"Questão {numero} de {len(self.questoes)}")
         self.barra_progresso.setValue(numero)
         self.lbl_tipo_questao.setText((q.get("disciplina") or "QUESTÃO").upper())
+        self._atualizar_contexto(q)
         self.lbl_enunciado.setPlainText(formatar_enunciado(q["enunciado"]))
+        self._aplicar_espacamento_leitura(self.lbl_enunciado)
+        self._ajustar_altura_texto(self.lbl_enunciado, 66, 360)
         caminho_imagem = q.get("imagem_path")
         pixmap = QPixmap()
         if caminho_imagem:
@@ -205,7 +286,9 @@ class ExecucaoProvaPage(QWidget):
                 caminho = Path(__file__).resolve().parents[3] / caminho
             pixmap.load(str(caminho))
         if not pixmap.isNull():
-            self.lbl_imagem.setPixmap(pixmap.scaled(900, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            imagem_exibida = pixmap.scaled(900, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.lbl_imagem.setPixmap(imagem_exibida)
+            self.lbl_imagem.setFixedHeight(imagem_exibida.height())
             self.lbl_imagem.show()
         else:
             self.lbl_imagem.clear()
@@ -218,6 +301,7 @@ class ExecucaoProvaPage(QWidget):
             option_row = _ExamOptionRow()
             option_row.setObjectName("exam-option")
             option_row.setMinimumWidth(0)
+            option_row.setMinimumHeight(48)
             option_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             option_layout = QHBoxLayout(option_row)
             option_layout.setContentsMargins(12, 8, 12, 8)
@@ -246,11 +330,81 @@ class ExecucaoProvaPage(QWidget):
             rb.toggled.connect(lambda checked, o=valor, qid=q["id"]: self.salvar_resposta_temp(checked, qid, o))
             rb.toggled.connect(lambda checked, row=option_row: self._marcar_opcao(row, checked))
             self._marcar_opcao(option_row, rb.isChecked())
-        self.alternativas_layout.addStretch(1)
+        self._ajustar_altura_alternativas()
         self.btn_anterior.setEnabled(self.idx_atual > 0)
         self.btn_proxima.setEnabled(self.idx_atual < len(self.questoes) - 1)
         self.alternativas_scroll.verticalScrollBar().setValue(0)
         self._scroll_timer.start(0)
+        QTimer.singleShot(0, self._ajustar_alturas_conteudo)
+
+    @staticmethod
+    def _aplicar_espacamento_leitura(editor):
+        cursor = QTextCursor(editor.document())
+        cursor.select(QTextCursor.Document)
+        formato = QTextBlockFormat()
+        formato.setLineHeight(140.0, QTextBlockFormat.ProportionalHeight.value)
+        cursor.mergeBlockFormat(formato)
+
+    @staticmethod
+    def _ajustar_altura_texto(editor, altura_minima, altura_maxima):
+        """Deixa o editor na altura do conteúdo, com rolagem só quando precisa."""
+        largura = max(1, editor.viewport().width())
+        editor.document().setTextWidth(largura)
+        altura_documento = editor.document().documentLayout().documentSize().height()
+        altura = round(altura_documento + 2 * editor.frameWidth() + 12)
+        editor.setFixedHeight(max(altura_minima, min(altura_maxima, altura)))
+
+    def _ajustar_altura_alternativas(self):
+        self.alternativas_layout.activate()
+        espacamento = max(0, self.alternativas_layout.spacing())
+        margens = self.alternativas_layout.contentsMargins()
+        largura = self.alternativas_scroll.viewport().width()
+        alturas_linhas = []
+        for indice in range(self.alternativas_layout.count()):
+            linha = self.alternativas_layout.itemAt(indice).widget()
+            if linha is None:
+                continue
+            linha.ensurePolished()
+            linha_layout = linha.layout()
+            margens_linha = linha_layout.contentsMargins()
+            botao = linha_layout.itemAt(0).widget()
+            texto = linha_layout.itemAt(1).widget()
+            largura_texto = max(
+                1,
+                largura
+                - margens_linha.left()
+                - margens_linha.right()
+                - botao.sizeHint().width()
+                - linha_layout.spacing(),
+            )
+            altura_texto = texto.heightForWidth(largura_texto) if texto.hasHeightForWidth() else texto.sizeHint().height()
+            altura_interna = max(altura_texto, botao.sizeHint().height())
+            altura = max(
+                linha.minimumHeight(),
+                altura_interna + margens_linha.top() + margens_linha.bottom() + 2,
+            )
+            linha.setFixedHeight(altura)
+            alturas_linhas.append(altura)
+
+        altura_conteudo = (
+            sum(alturas_linhas)
+            + espacamento * max(0, len(alturas_linhas) - 1)
+            + margens.top()
+            + margens.bottom()
+            + 8  # borda do cartão e área interna do scroll
+        )
+        self.alternativas_scroll.setFixedHeight(max(76, min(360, altura_conteudo)))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._ajustar_alturas_conteudo)
+
+    def _ajustar_alturas_conteudo(self):
+        self._ajustar_altura_texto(self.lbl_enunciado, 66, 360)
+        for section, _, editor in self._context_sections.values():
+            if section.isVisible() and editor.isVisible():
+                self._ajustar_altura_texto(editor, 48, 180)
+        self._ajustar_altura_alternativas()
 
     def _reiniciar_rolagem(self):
         self.alternativas_scroll.verticalScrollBar().setValue(0)

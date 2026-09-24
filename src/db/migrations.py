@@ -6,7 +6,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 QUESTAO_COLUMNS_V1 = {
     "disciplina": "TEXT",
@@ -46,6 +46,8 @@ PROVA_TABLES_V2 = (
 )
 
 QUESTAO_COLUMNS_V3 = {"imagem_path": "TEXT"}
+QUESTAO_COLUMNS_V4 = {"texto_apoio": "TEXT"}
+PROVA_COLUMNS_V4 = {"instrucoes_prova": "TEXT"}
 
 
 def backup_before_structural_change(db_path: str | Path) -> Path:
@@ -112,6 +114,29 @@ def apply_migrations(database, banco_existente: bool = True) -> None:
                 database.execute_sql(f'ALTER TABLE "questoes" ADD COLUMN "{nome}" {definicao}')
             database.execute_sql("UPDATE schema_version SET version = ?", (3,))
         versao = 3
+    if versao < 4:
+        questoes_existentes = {
+            linha[1] for linha in database.execute_sql('PRAGMA table_info("questoes")').fetchall()
+        }
+        provas_existentes = {
+            linha[1] for linha in database.execute_sql('PRAGMA table_info("provas_cadastradas")').fetchall()
+        }
+        questoes_faltantes = {
+            nome: tipo for nome, tipo in QUESTAO_COLUMNS_V4.items() if nome not in questoes_existentes
+        }
+        provas_faltantes = {
+            nome: tipo for nome, tipo in PROVA_COLUMNS_V4.items() if nome not in provas_existentes
+        }
+        caminho = Path(str(database.database))
+        if (questoes_faltantes or provas_faltantes) and banco_existente and caminho.exists() and caminho.stat().st_size and not backup_criado:
+            backup_before_structural_change(caminho)
+        with database.atomic():
+            for nome, definicao in questoes_faltantes.items():
+                database.execute_sql(f'ALTER TABLE "questoes" ADD COLUMN "{nome}" {definicao}')
+            for nome, definicao in provas_faltantes.items():
+                database.execute_sql(f'ALTER TABLE "provas_cadastradas" ADD COLUMN "{nome}" {definicao}')
+            database.execute_sql("UPDATE schema_version SET version = ?", (4,))
+        versao = 4
     if versao != CURRENT_SCHEMA_VERSION:
         raise RuntimeError(
             f"Versão de schema não suportada: {versao}; esperada: {CURRENT_SCHEMA_VERSION}."

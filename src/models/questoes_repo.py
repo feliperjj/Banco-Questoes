@@ -21,7 +21,7 @@ from src.db.models import (
 from src.importador.validacao import gabarito_valido, normalizar_gabarito, problemas_estrutura
 
 
-CAMPOS_QUESTAO = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario", "imagem_path")
+CAMPOS_QUESTAO = ("enunciado", "texto_apoio", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario", "imagem_path")
 GABARITOS_AVALIAVEIS = ("A", "B", "C", "D", "E", "Certo", "Errado")
 # Uma questão oficialmente anulada tem gabarito confirmado, embora não entre
 # no sorteio de provas aleatórias nem no cálculo de nota.
@@ -225,6 +225,7 @@ def criar_prova_cadastrada(
     lista_dados: list[dict],
     arquivo_questoes: str | None = None,
     arquivo_gabarito: str | None = None,
+    instrucoes_prova: str | None = None,
 ) -> int:
     """Salva um lote importado como uma prova de origem reutilizável."""
     init_db()
@@ -238,6 +239,7 @@ def criar_prova_cadastrada(
             nome=nome,
             arquivo_questoes=arquivo_questoes or None,
             arquivo_gabarito=arquivo_gabarito or None,
+            instrucoes_prova=(instrucoes_prova or "").strip() or None,
         )
         for ordem, dados in enumerate(lista_dados, 1):
             questao_id = dados.get("_questao_id") or _criar_questao_sem_transacao(dados)
@@ -659,7 +661,19 @@ def finalizar_tentativa(tentativa_id: int, respostas_usuario: dict, tempo_gasto_
 def buscar_questoes_da_prova(prova_id: int) -> list[dict]:
     init_db()
     query = Questao.select().join(ProvaQuestao).where(ProvaQuestao.prova == prova_id).order_by(ProvaQuestao.ordem)
-    return [_questao_dict(questao) for questao in prefetch(query, Alternativa)]
+    questoes = [_questao_dict(questao) for questao in prefetch(query, Alternativa)]
+    prova = Prova.get_or_none(Prova.id == prova_id)
+    try:
+        configuracao = json.loads(prova.filtros or "{}") if prova else {}
+    except (TypeError, json.JSONDecodeError):
+        configuracao = {}
+    fonte_id = configuracao.get("prova_cadastrada_id")
+    if fonte_id:
+        fonte = ProvaCadastrada.get_or_none(ProvaCadastrada.id == fonte_id)
+        instrucoes = fonte.instrucoes_prova if fonte else None
+        for questao in questoes:
+            questao["instrucoes_prova"] = instrucoes or ""
+    return questoes
 
 
 def desempenho_por_disciplina() -> list[dict]:

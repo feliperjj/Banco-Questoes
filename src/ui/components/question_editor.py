@@ -39,6 +39,12 @@ class QuestionEditor(QWidget):
         self.tabs.setObjectName("editor-tabs")
         outer.addWidget(self.tabs)
         self.content_form = self._form("Questão")
+        self.texto_apoio_input = QTextEdit()
+        self.texto_apoio_input.setAcceptRichText(False)
+        self.texto_apoio_input.setPlaceholderText("Texto, crônica, tabela ou outro trecho compartilhado por esta questão…")
+        self.texto_apoio_input.setMinimumHeight(90)
+        self.texto_apoio_input.setMaximumHeight(150)
+        self.content_form.addRow("Texto de apoio", self.texto_apoio_input)
         self.enunciado_input = QTextEdit()
         self.enunciado_input.setAcceptRichText(False)
         self.enunciado_input.setPlaceholderText("Escreva ou revise o enunciado completo…")
@@ -78,7 +84,7 @@ class QuestionEditor(QWidget):
         self.tipo_combo.currentIndexChanged.connect(self._atualizar_tipo)
         for widget in (self.disciplina_input, self.banca_input, self.dificuldade_combo, self.gabarito_input):
             widget.currentTextChanged.connect(self._changed)
-        for widget in (self.enunciado_input, self.topico_input, self.ano_input):
+        for widget in (self.texto_apoio_input, self.enunciado_input, self.topico_input, self.ano_input):
             widget.textChanged.connect(self._changed)
         self.alternativas_input.itemChanged.connect(self._changed)
         self.load({})
@@ -130,6 +136,7 @@ class QuestionEditor(QWidget):
     def load(self, dados):
         self._loading = True
         self._base = deepcopy(dados)
+        self.texto_apoio_input.setPlainText(dados.get("texto_apoio") or "")
         self.enunciado_input.setPlainText(dados.get("enunciado") or "")
         self.tipo_combo.setCurrentText(dados.get("tipo") or "multipla_escolha")
         self._atualizar_tipo()
@@ -154,7 +161,8 @@ class QuestionEditor(QWidget):
     def data(self, validate=False):
         dados = deepcopy(self._base)
         ano = self.ano_input.text().strip()
-        dados.update(enunciado=self.enunciado_input.toPlainText().strip(), tipo=self.tipo_combo.currentData(),
+        dados.update(texto_apoio=self.texto_apoio_input.toPlainText().strip(),
+                     enunciado=self.enunciado_input.toPlainText().strip(), tipo=self.tipo_combo.currentData(),
                      gabarito=self.gabarito_input.currentData(), disciplina=self.disciplina_input.currentText().strip(),
                      topico=self.topico_input.text().strip(), banca=self.banca_input.currentText().strip(),
                      ano=int(ano) if ano.isdigit() else (ano or None), dificuldade=self.dificuldade_combo.currentData())

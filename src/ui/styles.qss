@@ -107,6 +107,40 @@ QFrame#exam-question-card, QFrame#review-card {
     border: 1px solid #dce5df;
     border-radius: 14px;
 }
+QFrame#exam-context-section {
+    background: #f6f9f5;
+    border: 1px solid #e1e9e2;
+    border-radius: 9px;
+}
+QToolButton#exam-context-toggle {
+    background: transparent;
+    border: none;
+    color: #197565;
+    font-weight: 700;
+    padding: 8px 10px;
+    text-align: left;
+}
+QTextEdit#exam-context-text {
+    background: #ffffff;
+    border: none;
+    border-radius: 7px;
+    color: #314a41;
+    font-size: 15px;
+    padding: 14px 18px;
+}
+QFrame#exam-statement-block {
+    background: #fbfcfa;
+    border: 1px solid #dce7df;
+    border-left: 4px solid #197565;
+    border-radius: 10px;
+}
+QLabel#exam-statement-title {
+    background: transparent;
+    color: #197565;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
 QFrame#exam-options-card, QFrame#review-options-card {
     background: #f6f9f5;
     border: 1px solid #e1e9e2;
@@ -119,6 +153,12 @@ QTextEdit#exam-statement, QTextEdit#review-statement {
     font-size: 12px;
     line-height: 1.45;
     padding: 4px;
+}
+QTextEdit#exam-statement {
+    background: transparent;
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 10px 4px;
 }
 QRadioButton#exam-option, QRadioButton#review-option {
     background: #ffffff;
@@ -136,7 +176,7 @@ QFrame#exam-option { min-height: 48px; }
 QFrame#exam-option:hover { border-color: #8db9a8; background: #edf5ef; }
 QFrame#exam-option[selected="true"] { border: 2px solid #197565; background: #e8f3ec; }
 QRadioButton#exam-option-toggle { background: transparent; border: none; padding: 0; }
-QLabel#exam-option-label { background: transparent; color: #365149; padding: 2px 0; }
+QLabel#exam-option-label { background: transparent; color: #365149; font-size: 14px; padding: 4px 0; }
 QRadioButton#exam-option:hover, QRadioButton#review-option:hover { border-color: #8db9a8; background: #edf5ef; }
 QRadioButton#exam-option:checked, QRadioButton#review-option:checked { border: 2px solid #197565; background: #e8f3ec; color: #165d4c; }
 QProgressBar#exam-progress, QProgressBar#review-progress {

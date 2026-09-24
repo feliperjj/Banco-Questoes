@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton,
-    QComboBox, QScrollArea, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QComboBox, QScrollArea, QSpinBox, QSplitter, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
@@ -35,6 +35,7 @@ class ImportacaoPage(QWidget):
         self.setObjectName("import-page")
         self.session = ImportacaoSession()
         self.current_index = None
+        self._loading_instrucoes = False
         self.caminho_questoes_pendente = ""
         self.caminho_gabarito = ""
         self.operation = None
@@ -163,6 +164,21 @@ class ImportacaoPage(QWidget):
         self.classificar_btn.setObjectName("secondary-button")
         self.classificar_btn.clicked.connect(self._classificar_dialog)
         box.addWidget(self.classificar_btn, alignment=Qt.AlignRight)
+        self.instrucoes_toggle = QPushButton("Instruções gerais da prova · ver ou adicionar")
+        self.instrucoes_toggle.setObjectName("secondary-button")
+        self.instrucoes_toggle.setCheckable(True)
+        self.instrucoes_toggle.toggled.connect(self._alternar_instrucoes)
+        self.instrucoes_toggle.hide()
+        box.addWidget(self.instrucoes_toggle, alignment=Qt.AlignLeft)
+        self.instrucoes_editor = QTextEdit()
+        self.instrucoes_editor.setObjectName("exam-instructions-review")
+        self.instrucoes_editor.setAcceptRichText(False)
+        self.instrucoes_editor.setPlaceholderText("Informações compartilhadas da prova, separadas das questões.")
+        self.instrucoes_editor.setMinimumHeight(80)
+        self.instrucoes_editor.setMaximumHeight(150)
+        self.instrucoes_editor.textChanged.connect(self._editar_instrucoes)
+        self.instrucoes_editor.hide()
+        box.addWidget(self.instrucoes_editor)
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         left = QWidget()
@@ -203,6 +219,10 @@ class ImportacaoPage(QWidget):
         for index in (1, 2):
             self.steps.setTabEnabled(index, tem)
         self.steps.tabBar().setEnabled(not busy)
+        self.instrucoes_toggle.setEnabled(not busy)
+        # Instruções são salvas no cadastro da prova quando o lote é concluído.
+        # Depois disso, deixá-las editáveis criaria uma revisão que não persiste.
+        self.instrucoes_editor.setEnabled(not busy and bool(pendentes))
         self.filtro.setEnabled(not busy)
         self.lista_questoes.setEnabled(not busy)
         self.btn_selecionar_questoes.setEnabled(not busy)
@@ -295,6 +315,13 @@ class ImportacaoPage(QWidget):
             self._informar("Nenhuma questão foi reconhecida. A revisão anterior foi preservada; tente outro arquivo.", True)
         else:
             self.session.carregar(questoes, caminho)
+            self._loading_instrucoes = True
+            self.instrucoes_editor.blockSignals(True)
+            self.instrucoes_editor.setPlainText(self.session.instrucoes_prova)
+            self.instrucoes_editor.blockSignals(False)
+            self._loading_instrucoes = False
+            self.instrucoes_toggle.setChecked(False)
+            self.instrucoes_toggle.show()
             self.current_index = None
             self.lbl_arquivo.setText(Path(caminho).name)
             self.lbl_arquivo.setToolTip(caminho)
@@ -400,7 +427,15 @@ class ImportacaoPage(QWidget):
             dados,
             arquivo_questoes=self.session.caminho,
             arquivo_gabarito=self.caminho_gabarito,
+            instrucoes_prova=self.session.instrucoes_prova,
         )
+
+    def _alternar_instrucoes(self, expandido):
+        self.instrucoes_editor.setVisible(expandido)
+
+    def _editar_instrucoes(self):
+        if not self._loading_instrucoes:
+            self.session.instrucoes_prova = self.instrucoes_editor.toPlainText().strip()
 
     def _salvar(self, indices):
         if self.ocupada or not indices:
