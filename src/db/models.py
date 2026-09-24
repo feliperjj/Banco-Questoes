@@ -26,6 +26,7 @@ class Questao(BaseModel):
     dificuldade = TextField(null=True)
     gabarito = TextField(null=True)
     comentario = TextField(null=True)
+    imagem_path = TextField(null=True)
     ativa = BooleanField(default=True)
     criada_em = DateTimeField(default=datetime.datetime.now)
 

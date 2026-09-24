@@ -11,12 +11,14 @@ from .perfis.gabaritos_grades import _extrair_grade_identificada, _extrair_gabar
 from .perfis.gabaritos_texto import (
     ExtratorBanca,
     ExtratorMultiprova,
+    ExtratorItensCE,
     ExtratorPadrao,
     _extrair_duas_linhas,
     _extrair_itens_certo_errado,
     _extrair_pares_mesma_linha,
     selecionar_extrator,
 )
+from .perfis.documentos import classificar_gabarito, segmentar_blocos_gabarito
 import logging
 import re
 import unicodedata
@@ -28,6 +30,44 @@ logger = logging.getLogger(__name__)
 
 
 from .pdf_texto import _corrigir_encoding_ocr
+
+
+def diagnosticar_gabarito_pdf(caminho: str) -> dict:
+    """Classifica o layout de cada página e lista os blocos identificáveis."""
+    paginas = []
+    textos = []
+    with pdfplumber.open(caminho) as pdf:
+        for indice, pagina in enumerate(pdf.pages):
+            texto = _corrigir_encoding_ocr(pagina.extract_text() or "")
+            if not texto.strip():
+                continue
+            textos.append(texto)
+            perfil = classificar_gabarito(texto)
+            blocos = segmentar_blocos_gabarito(texto)
+            paginas.append({
+                "pagina": indice + 1,
+                "perfil": perfil.padrao,
+                "familia": perfil.familia,
+                "evidencias": list(perfil.evidencias),
+                "codigos": list(perfil.identificadores),
+                "metadados": perfil.metadados or {},
+                "intervalo_questoes": list(perfil.intervalo_questoes),
+                "quantidade_respostas": perfil.quantidade_respostas,
+                "blocos": [b.identificador for b in blocos if b.identificador],
+            })
+    perfil_completo = classificar_gabarito("\n".join(textos))
+    perfis = sorted({p["perfil"] for p in paginas})
+    return {
+        "arquivo": caminho,
+        "perfis": perfis,
+        "padrao_predominante": perfil_completo.padrao,
+        "familia": perfil_completo.familia,
+        "codigos": list(perfil_completo.identificadores),
+        "metadados": perfil_completo.metadados or {},
+        "intervalo_questoes": list(perfil_completo.intervalo_questoes),
+        "quantidade_respostas": perfil_completo.quantidade_respostas,
+        "paginas": paginas,
+    }
 
 
 def extrair_gabaritos_pdf(
@@ -54,17 +94,22 @@ def extrair_gabaritos_pdf(
     with pdfplumber.open(caminho) as pdf:
         for numero_pagina, pagina in enumerate(pdf.pages):
             texto = _corrigir_encoding_ocr(pagina.extract_text() or "")
+            grade = _extrair_grade_identificada(pagina, texto, codigo_prova, cargo)
             if not texto.strip():
                 # A seleção de páginas escaneadas depende do cabeçalho lido
                 # pelo OCR; não descartar antes de poder verificar o contexto.
                 paginas_relevantes.append(numero_pagina)
-                continue
-            grade = _extrair_grade_identificada(pagina, texto, codigo_prova, cargo)
-            if grade is not None:
-                gabaritos.incorporar(grade)
+                if grade is not None:
+                    gabaritos.incorporar(grade)
                 continue
             if not contexto.pagina_relevante(texto):
                 continue
+            # A leitura geométrica pode capturar só as marcações anuladas em
+            # gabaritos tabulares. Mantê-la como complemento permite que o
+            # extrator textual do perfil complete primeiro a sequência inteira.
+            if grade is not None:
+                tabelas.incorporar(grade)
+            perfil_pagina = classificar_gabarito(texto)
             linhas = [re.sub(r"\s+", " ", linha).strip() for linha in texto.splitlines()]
             paginas_relevantes.append(numero_pagina)
             linhas_filtradas = contexto.linhas_do_cargo(linhas)
@@ -74,6 +119,7 @@ def extrair_gabaritos_pdf(
             linhas = linhas_filtradas
             resultado = selecionar_extrator(
                 texto, contexto.codigo_prova, contexto.cargo_normalizado,
+                perfil=perfil_pagina.padrao,
             ).extrair(linhas)
             if resultado or getattr(resultado, "conflitos", None):
                 gabaritos.incorporar(resultado)

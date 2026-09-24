@@ -24,6 +24,7 @@ from .gabaritos import (
     ExtratorBanca,
     ExtratorPadrao,
     ExtratorMultiprova,
+    ExtratorItensCE,
     selecionar_extrator,
     FiltroContexto,
     _extrair_grade_identificada,

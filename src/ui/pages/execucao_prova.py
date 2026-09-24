@@ -1,7 +1,9 @@
 import logging
+from pathlib import Path
 from src.ui.components.statement import formatar_enunciado
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 import src.models.questoes_repo as repo
@@ -65,8 +67,14 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_enunciado.setLineWrapMode(QTextEdit.WidgetWidth)
         self.lbl_enunciado.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.lbl_enunciado.setMinimumHeight(90)
-        self.lbl_enunciado.setMaximumHeight(220)
+        self.lbl_enunciado.setMaximumHeight(360)
         cartao_layout.addWidget(self.lbl_enunciado)
+        self.lbl_imagem = QLabel()
+        self.lbl_imagem.setObjectName("exam-question-image")
+        self.lbl_imagem.setAlignment(Qt.AlignCenter)
+        self.lbl_imagem.setMaximumHeight(420)
+        self.lbl_imagem.hide()
+        cartao_layout.addWidget(self.lbl_imagem)
         self.alternativas_frame = QFrame()
         self.alternativas_frame.setObjectName("exam-options-card")
         self.alternativas_frame.setMinimumWidth(0)
@@ -130,6 +138,8 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_progresso.setText("Escolha uma prova para começar")
         self.lbl_tipo_questao.setText("MODO PROVA")
         self.lbl_enunciado.setText("Suas questões aparecerão aqui quando você iniciar uma prova.")
+        self.lbl_imagem.clear()
+        self.lbl_imagem.hide()
         self.limpar_alternativas()
         self.btn_anterior.setEnabled(False)
         self.btn_proxima.setEnabled(False)
@@ -187,6 +197,19 @@ class ExecucaoProvaPage(QWidget):
         self.barra_progresso.setValue(numero)
         self.lbl_tipo_questao.setText((q.get("disciplina") or "QUESTÃO").upper())
         self.lbl_enunciado.setPlainText(formatar_enunciado(q["enunciado"]))
+        caminho_imagem = q.get("imagem_path")
+        pixmap = QPixmap()
+        if caminho_imagem:
+            caminho = Path(caminho_imagem)
+            if not caminho.is_absolute():
+                caminho = Path(__file__).resolve().parents[3] / caminho
+            pixmap.load(str(caminho))
+        if not pixmap.isNull():
+            self.lbl_imagem.setPixmap(pixmap.scaled(900, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.lbl_imagem.show()
+        else:
+            self.lbl_imagem.clear()
+            self.lbl_imagem.hide()
         self.limpar_alternativas()
         opcoes = [(a["letra"], f"{a['letra']})  {a['texto']}") for a in q.get("alternativas", [])] if q["tipo"] == "multipla_escolha" else [("Certo", "Certo"), ("Errado", "Errado")]
         if not opcoes:

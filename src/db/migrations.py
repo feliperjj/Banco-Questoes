@@ -6,7 +6,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 QUESTAO_COLUMNS_V1 = {
     "disciplina": "TEXT",
@@ -44,6 +44,8 @@ PROVA_TABLES_V2 = (
     )
     """,
 )
+
+QUESTAO_COLUMNS_V3 = {"imagem_path": "TEXT"}
 
 
 def backup_before_structural_change(db_path: str | Path) -> Path:
@@ -97,6 +99,19 @@ def apply_migrations(database, banco_existente: bool = True) -> None:
                 database.execute_sql(definicao)
             database.execute_sql("UPDATE schema_version SET version = ?", (2,))
         versao = 2
+    if versao < 3:
+        existentes = {
+            linha[1] for linha in database.execute_sql('PRAGMA table_info("questoes")').fetchall()
+        }
+        faltantes = {nome: tipo for nome, tipo in QUESTAO_COLUMNS_V3.items() if nome not in existentes}
+        caminho = Path(str(database.database))
+        if faltantes and banco_existente and caminho.exists() and caminho.stat().st_size and not backup_criado:
+            backup_before_structural_change(caminho)
+        with database.atomic():
+            for nome, definicao in faltantes.items():
+                database.execute_sql(f'ALTER TABLE "questoes" ADD COLUMN "{nome}" {definicao}')
+            database.execute_sql("UPDATE schema_version SET version = ?", (3,))
+        versao = 3
     if versao != CURRENT_SCHEMA_VERSION:
         raise RuntimeError(
             f"Versão de schema não suportada: {versao}; esperada: {CURRENT_SCHEMA_VERSION}."

@@ -23,6 +23,7 @@
   "lote_2026_08_22/analista_analista_de_sistemas.pdf": {
     "gabarito": "lote_2026_08_22/gabaritos_definitivos.pdf",
     "cargo": "IBFC_04_ANALISTA - ANALISTA DE SISTEMAS",
+    "codigo": "IBFC_04_ANALISTA",
     "confirmado": true,
     "evidencia": "Código e cargo explícitos no PDF"
   },
@@ -59,6 +60,7 @@
   "lote_2026_08_22/analista_producao_redes_suporte_de_banco_de_dados_e_suporte_de_sistemas.pdf": {
     "gabarito": "lote_2026_08_22/gabarito-1.pdf",
     "cargo": "IBFC_04",
+    "codigo": "IBFC_04",
     "confirmado": true,
     "evidencia": "Código explícito no PDF"
   },
@@ -110,6 +112,7 @@
   "analista_de_planejamento_e_orcamento_especialidade_governanca_e_gestao_de_projetos_de_ti-cebraspe.pdf": {
     "gabarito": "gabarito_definitivo.pdf-CEBRASPE.pdf",
     "cargo": "CONHECIMENTOS GERAIS COMUNS A TODAS AS ESPECIALIDADES",
+    "codigo": "958_MPO_ANALISTA_CG1_01",
     "confirmado": true,
     "evidencia": "O parser atual retém os 100 itens da Prova Objetiva P1, conhecimentos gerais (caderno pp.1-7). Correspondem ao bloco comum 958_MPO_ANALISTA_CG1_01, página 9 do gabarito. P2 reinicia 1-100 e ainda requer importação separada; não utilizar Cargo 1 (especialidade Geral)."
   },
@@ -133,5 +136,19 @@
     "cargo": "AGENTE ADMINISTRATIVO I",
     "confirmado": true,
     "evidencia": "Caderno p.1: Município de Paraisópolis, cargo Agente Administrativo I. Gabarito preliminar p.1: concurso de Paraisópolis, linha exata AGENTE ADMINISTRATIVO I; colunas numeradas 01 a 30, questão 24 anulada."
+  },
+  "lote_2026_08_22/analista_area_ciencias_agrarias_subarea_sistemas_de_producao_animal.pdf": {
+    "gabarito": "lote_2026_08_22/gabarito_definitivo.pdf",
+    "cargo": "EMBRAPA",
+    "codigo": "042_EMBRAPA_ANALISTA_CG2_01;042_EMBRAPA_ANALISTA_C03_01;042_EMBRAPA_ANALISTA_015_01",
+    "confirmado": true,
+    "evidencia": "Gabarito definitivo EMBRAPA 2025: bloco comum CG2, complemento C03 e específico 015 para a opção 40003735 (Ciências Agrárias, Sistemas de Produção Animal). Códigos e opção coincidem com o caderno."
+  },
+  "lote_2026_08_22/analista_area_ciencias_exatas_e_da_terra_subarea_sistemas_de_informacao.pdf": {
+    "gabarito": "lote_2026_08_22/gabarito_definitivo.pdf",
+    "cargo": "EMBRAPA",
+    "codigo": "042_EMBRAPA_ANALISTA_CG2_01;042_EMBRAPA_ANALISTA_C05_01;042_EMBRAPA_ANALISTA_028_01",
+    "confirmado": true,
+    "evidencia": "Gabarito definitivo EMBRAPA 2025: bloco comum CG2, complemento C05 e específico 028 para a opção 40002345 (Ciências Exatas, Sistemas de Informação). Códigos e opção coincidem com o caderno."
   }
 }

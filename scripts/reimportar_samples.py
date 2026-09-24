@@ -23,6 +23,8 @@ from src.db.models import (
     ProgressoTentativa,
     Alternativa,
     Prova,
+    ProvaCadastrada,
+    ProvaCadastradaQuestao,
     ProvaQuestao,
     Questao,
     Resposta,
@@ -30,13 +32,17 @@ from src.db.models import (
     Tentativa,
 )
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
+from src.importador.gabaritos import diagnosticar_gabarito_pdf
+from src.importador.perfis.documentos import classificar_caderno, PerfilDocumento, pontuar_associacao
 from src.importador.parser import parsear_questoes, quantidade_declarada
+from src.importador.imagens import anexar_imagens_referenciadas
 from src.importador.catalogo import carregar_catalogo, normalizar_chave
 from src.importador.validacao import associar_gabaritos, validar_gabarito
 
 
 SAMPLES = ROOT / "samples"
 DATABASE = ROOT / "data" / "questoes.db"
+CHECKPOINT = ROOT / "reports" / "reimportacao_samples_checkpoint.json"
 CATALOGO = carregar_catalogo(ROOT / "config" / "gabaritos.json")
 
 # Evidências explícitas encontradas na capa/organização do próprio sample.
@@ -95,35 +101,89 @@ def _dados_questao(questao: dict) -> dict:
         "ano": questao.get("ano"),
         "dificuldade": "media",
         "gabarito": questao.get("gabarito"),
+        "imagem_path": questao.get("imagem_path"),
     }
 
 
 def _limpar_banco():
     # A ordem respeita as foreign keys do SQLite.
+    ProvaCadastradaQuestao.delete().execute()
     for modelo in (ProgressoTentativa, Resposta, Tentativa, RevisaoEspacada, ProvaQuestao, Prova, Alternativa, Questao):
         modelo.delete().execute()
+
+
+def _salvar_checkpoint(resultados: list[dict], dados_importacao: list[list[dict]]) -> None:
+    CHECKPOINT.parent.mkdir(exist_ok=True)
+    temporario = CHECKPOINT.with_suffix(".tmp")
+    temporario.write_text(
+        json.dumps({"por_arquivo": resultados, "dados_importacao": dados_importacao}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    temporario.replace(CHECKPOINT)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reimportação com backup e conferência de cobertura")
     parser.add_argument("--min-cobertura", type=float, default=0, help="Exige cobertura acima deste percentual antes de alterar o banco")
+    parser.add_argument("--retomar-checkpoint", action="store_true", help="Reutiliza extrações salvas após uma falha na gravação")
     args = parser.parse_args()
     pdfs = sorted(path for path in SAMPLES.rglob("*.pdf") if _is_question_pdf(path))
     if not pdfs:
         raise RuntimeError("Nenhum PDF encontrado; o banco foi preservado.")
     resultados = []
     dados_importacao = []
+    if args.retomar_checkpoint and CHECKPOINT.exists():
+        checkpoint = json.loads(CHECKPOINT.read_text(encoding="utf-8"))
+        resultados = checkpoint["por_arquivo"]
+        dados_importacao = checkpoint["dados_importacao"]
+    processados = {resultado["arquivo"] for resultado in resultados}
+    diagnosticos_gabarito = {}
 
     # Primeiro extrai tudo; uma falha aqui não destrói o banco atual.
     for caminho in pdfs:
+        if str(caminho.relative_to(ROOT)) in processados:
+            continue
         texto = extrair_texto(str(caminho))
         questoes = parsear_questoes(texto, str(caminho))
+        imagens = anexar_imagens_referenciadas(caminho, questoes, ROOT)
         banca_confirmada = BANCAS_CONFIRMADAS.get(str(caminho.relative_to(SAMPLES)).replace("\\", "/"))
         if banca_confirmada:
             for questao in questoes:
                 questao["banca"] = banca_confirmada
         registro_gabarito = _registro_do_sample(caminho)
         gabaritos = _gabarito_do_sample(caminho, questoes)
+        perfil_caderno = classificar_caderno(texto)
+        perfil_gabarito = None
+        diagnostico_gabarito = None
+        associacao = {"pontos": 0, "decisao": "revisao_manual", "evidencias": []}
+        if registro_gabarito:
+            arquivo_gabarito = str(SAMPLES / registro_gabarito["gabarito"])
+            if arquivo_gabarito not in diagnosticos_gabarito:
+                diagnosticos_gabarito[arquivo_gabarito] = diagnosticar_gabarito_pdf(arquivo_gabarito)
+            diagnostico_completo = diagnosticos_gabarito[arquivo_gabarito]
+            diagnostico_gabarito = {
+                "arquivo": diagnostico_completo["arquivo"],
+                "perfis": diagnostico_completo["perfis"],
+                "codigos": diagnostico_completo["codigos"],
+                "paginas": [p for p in diagnostico_completo["paginas"] if p["codigos"] or p["perfil"] != "pares_textuais"],
+            }
+            perfis = diagnostico_gabarito["perfis"]
+            perfil_nome = diagnostico_completo["padrao_predominante"]
+            perfil_gabarito = PerfilDocumento(
+                "gabarito", perfil_nome,
+                tuple(sorted({e for pagina in diagnostico_gabarito["paginas"] for e in pagina["evidencias"]})),
+                tuple(diagnostico_gabarito["codigos"]),
+                familia=diagnostico_completo["familia"],
+                metadados={k: tuple(v) for k, v in diagnostico_completo["metadados"].items()},
+                intervalo_questoes=tuple(diagnostico_completo["intervalo_questoes"]),
+                quantidade_respostas=diagnostico_completo["quantidade_respostas"],
+            )
+            associacao = pontuar_associacao(
+                perfil_caderno, perfil_gabarito,
+                codigo=registro_gabarito.get("codigo") or registro_gabarito.get("prova") or "",
+                cargo=registro_gabarito.get("cargo") or "",
+                evidencia_catalogo=registro_gabarito.get("evidencia", "") if registro_gabarito.get("confirmado") else "",
+            )
         quantidade_esperada = quantidade_declarada(texto)
         cargo_confirmado = bool(registro_gabarito)
         validacao = validar_gabarito(
@@ -139,6 +199,7 @@ def main() -> None:
                 "arquivo": str(caminho.relative_to(ROOT)),
                 "caracteres": len(texto),
                 "questoes": len(questoes),
+                "imagens_preservadas": imagens,
                 "alta": sum(q["confianca"] == "alta" for q in questoes),
                 "media": sum(q["confianca"] == "media" for q in questoes),
                 "baixa": sum(q["confianca"] == "baixa" for q in questoes),
@@ -147,12 +208,17 @@ def main() -> None:
                 "revisao_manual": validacao["revisao_manual"],
                 "banca": next((q.get("banca") for q in questoes if q.get("banca")), ""),
                 "pcimarkpci": "pcimarkpci" in texto.lower(),
+                "perfil_caderno": perfil_caderno.como_dict(),
+                "perfil_gabarito": perfil_gabarito.como_dict() if perfil_gabarito else None,
+                "diagnostico_gabarito": diagnostico_gabarito,
+                "associacao_padroes": associacao,
             }
         )
         dados_importacao.append(dados)
         resultados[-1]["sha256_caderno"] = hashlib.sha256(caminho.read_bytes()).hexdigest()
         resultados[-1]["associacao"] = registro_gabarito
         resultados[-1]["itens"] = [{"numero": q["numero"], "gabarito": q.get("gabarito")} for q in questoes]
+        _salvar_checkpoint(resultados, dados_importacao)
         print(f"Extraído: {caminho.name}: {len(questoes)} questões, {gabaritos_aplicados} vínculos", file=sys.stderr, flush=True)
 
     if not any(dados_importacao):
@@ -173,9 +239,22 @@ def main() -> None:
     with db.atomic():
         _limpar_banco()
         total = 0
+        provas_por_arquivo = {
+            str(prova.arquivo_questoes or "").replace("\\", "/").casefold(): prova.id
+            for prova in ProvaCadastrada.select(ProvaCadastrada.id, ProvaCadastrada.arquivo_questoes)
+            if prova.arquivo_questoes
+        }
         for dados_arquivo, resultado in zip(dados_importacao, resultados):
-            for dados, item in zip(dados_arquivo, resultado["itens"]):
+            arquivo_normalizado = resultado["arquivo"].replace("\\", "/").casefold()
+            prova_cadastrada_id = provas_por_arquivo.get(arquivo_normalizado)
+            for ordem, (dados, item) in enumerate(zip(dados_arquivo, resultado["itens"]), start=1):
                 item["id"] = _criar_questao_sem_transacao(dados)
+                if prova_cadastrada_id is not None:
+                    ProvaCadastradaQuestao.create(
+                        prova_cadastrada=prova_cadastrada_id,
+                        questao=item["id"],
+                        ordem=ordem,
+                    )
                 total += 1
 
     resumo = {
@@ -189,6 +268,7 @@ def main() -> None:
     out = ROOT / "reports" / "reimportacao_samples.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(resumo, ensure_ascii=False, indent=2), encoding="utf-8")
+    CHECKPOINT.unlink(missing_ok=True)
     print(json.dumps(resumo, ensure_ascii=False, indent=2))
 
 

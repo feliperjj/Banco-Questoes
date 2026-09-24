@@ -21,8 +21,11 @@ from src.db.models import (
 from src.importador.validacao import gabarito_valido, normalizar_gabarito, problemas_estrutura
 
 
-CAMPOS_QUESTAO = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario")
+CAMPOS_QUESTAO = ("enunciado", "tipo", "disciplina", "topico", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario", "imagem_path")
 GABARITOS_AVALIAVEIS = ("A", "B", "C", "D", "E", "Certo", "Errado")
+# Uma questão oficialmente anulada tem gabarito confirmado, embora não entre
+# no sorteio de provas aleatórias nem no cálculo de nota.
+GABARITOS_CONFIRMADOS = GABARITOS_AVALIAVEIS + ("Anulada",)
 
 
 def _as_dict(model, fields=None):
@@ -258,7 +261,7 @@ def listar_provas_cadastradas() -> list[dict]:
             (
                 (
                     (Questao.ativa == True)
-                    & Questao.gabarito.in_(GABARITOS_AVALIAVEIS),
+                    & Questao.gabarito.in_(GABARITOS_CONFIRMADOS),
                     1,
                 ),
             ),
@@ -362,7 +365,7 @@ def listar_lotes_importados_sem_prova() -> list[dict]:
             data = criada_em.strftime("%d/%m/%Y") if criada_em else "lote antigo"
             partes_nome.append(f"Prova importada · {data}")
 
-        avaliaveis = sum(q.gabarito in GABARITOS_AVALIAVEIS for q in questoes_lote)
+        avaliaveis = sum(q.gabarito in GABARITOS_CONFIRMADOS for q in questoes_lote)
         questao_ids = [q.id for q in questoes_lote]
         lotes.append(
             {
@@ -398,7 +401,7 @@ def criar_prova_a_partir_de_questoes(
     indisponiveis = [
         qid
         for qid in ids
-        if not por_id[qid].ativa or por_id[qid].gabarito not in GABARITOS_AVALIAVEIS
+        if not por_id[qid].ativa or por_id[qid].gabarito not in GABARITOS_CONFIRMADOS
     ]
     if indisponiveis:
         raise ValueError(
@@ -436,7 +439,7 @@ def listar_fontes_de_prova() -> list[dict]:
             .where(
                 (ProvaQuestao.prova == prova.id)
                 & (Questao.ativa == True)
-                & Questao.gabarito.in_(GABARITOS_AVALIAVEIS)
+                & Questao.gabarito.in_(GABARITOS_CONFIRMADOS)
             )
             .count()
         )
@@ -477,7 +480,7 @@ def criar_prova_a_partir_de_cadastrada(
     indisponiveis = [
         item.questao_id
         for item in vinculadas
-        if not item.questao.ativa or item.questao.gabarito not in GABARITOS_AVALIAVEIS
+        if not item.questao.ativa or item.questao.gabarito not in GABARITOS_CONFIRMADOS
     ]
     if indisponiveis:
         raise ValueError(
@@ -520,7 +523,7 @@ def criar_prova_a_partir_de_existente(
     indisponiveis = [
         item.questao_id
         for item in vinculadas
-        if not item.questao.ativa or item.questao.gabarito not in GABARITOS_AVALIAVEIS
+        if not item.questao.ativa or item.questao.gabarito not in GABARITOS_CONFIRMADOS
     ]
     if indisponiveis:
         raise ValueError(

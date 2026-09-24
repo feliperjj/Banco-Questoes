@@ -33,8 +33,18 @@ class FiltroContexto:
         self.codigo_ativo = not bool(self.codigo_prova)
 
     def pagina_relevante(self, texto: str) -> bool:
-        if re.fullmatch(r'(?i)prova\s*\d{1,2}', self.codigo_prova) and re.search(r'(?i)CONHECIMENTOS\s+B[ÁA]SICOS', texto) and not re.search(r'(?i)\bPROVA\s+\d', texto):
-            return True
+        prova_numerada = re.fullmatch(r'(?i)prova\s*([1-4])', self.codigo_prova)
+        if prova_numerada:
+            # O bloco de conhecimentos básicos é compartilhado pelas provas;
+            # os específicos precisam conter a versão escolhida e o cargo.
+            if re.search(r'(?i)CONHECIMENTOS\s+B[ÁA]SICOS', texto) and not re.search(r'(?i)\bPROVA\s+\d', texto):
+                return True
+            versoes = set(re.findall(r'(?i)\bPROVA\s*([1-4])\b', texto))
+            versao_presente = prova_numerada.group(1) in versoes
+            cargo_presente = not self.cargo_normalizado or self.cargo_normalizado in _texto_comparavel(texto)
+            self.codigo_ativo = versao_presente
+            self.cargo_ativo = cargo_presente
+            return versao_presente and cargo_presente
         linhas = texto.splitlines()
         cabecalhos = [linha for i, linha in enumerate(linhas) if _cabecalho_cargo(linhas, i)]
         if self.cargo_normalizado and cabecalhos:
@@ -59,8 +69,9 @@ class FiltroContexto:
             if pedido:
                 self.codigo_ativo = True
         texto_normalizado = texto.lower().replace("-", "_")
-        codigos_cebraspe = set(re.findall(r'\b\d{3}_[a-z0-9]+_[a-z0-9]+_\d{2}\b', texto_normalizado))
-        if re.search(r'\b\d{3}_[a-z0-9]+_[a-z0-9]+_\d{2}\b', self.codigo_prova) and not codigos_cebraspe:
+        padrao_codigo_cebraspe = r'\b\d{3}(?:_[a-z0-9]+)+_\d{2}\b'
+        codigos_cebraspe = set(re.findall(padrao_codigo_cebraspe, texto_normalizado))
+        if re.search(padrao_codigo_cebraspe, self.codigo_prova) and not codigos_cebraspe:
             return False
         if self.codigo_prova and codigos_cebraspe:
             selecionados = {c.strip() for c in self.codigo_prova.split(';') if c.strip()}
@@ -69,7 +80,9 @@ class FiltroContexto:
                 return False
         if not self.codigo_prova or self.codigo_prova in texto_normalizado:
             self.codigo_ativo = True
-        outro_codigo = re.search(r"c[oó]digo\s*[:\-]?\s*([a-z0-9_]+)", texto_normalizado)
+        # Só tratar como metadado uma declaração explícita ("Código: X").
+        # Títulos como "Código de Conduta" não são códigos de prova.
+        outro_codigo = re.search(r"\bc[oó]digo\s*[:\-]\s*([a-z0-9_]+)", texto_normalizado)
         if self.codigo_ativo and outro_codigo and self.codigo_prova and self.codigo_prova not in outro_codigo.group(1):
             self.codigo_ativo = False
             return False
@@ -88,6 +101,22 @@ class FiltroContexto:
         return True
 
     def linhas_do_cargo(self, linhas: list[str]) -> list[str]:
+        # Nas matrizes de gabarito, o extrator precisa ver todos os títulos de
+        # coluna para escolher a versão; recortar só pelo cargo remove esses
+        # rótulos antes da seleção da coluna.
+        if re.fullmatch(r"(?i)prova\s*[1-4]", self.codigo_prova.strip()):
+            return linhas
+        # O código completo já selecionou esta página/bloco. Não reaplicar um
+        # recorte por cargo amplo (como EMBRAPA), que pode cortar o trecho do
+        # gabarito específico depois do cabeçalho da opção.
+        texto_pagina = "\n".join(linhas)
+        codigos_selecionados = [c.strip() for c in self.codigo_prova.split(";") if c.strip()]
+        if any(
+            re.fullmatch(r"(?i)[a-z0-9]+(?:_[a-z0-9]+)+", codigo)
+            and re.search(rf"(?i)(?<![a-z0-9]){re.escape(codigo)}(?![a-z0-9])", texto_pagina)
+            for codigo in codigos_selecionados
+        ):
+            return linhas
         pedido = re.search(r'(?i)(?:prova\s+tipo|tipo|prova|t)\s*(\d+)\b', self.codigo_prova)
         tipos = [re.search(r'(?i)\bprova\s+tipo\s+(\d+)\b', linha) for linha in linhas]
         if any(tipos):
@@ -119,6 +148,9 @@ class FiltroContexto:
             linha = comparaveis[i]
             if re.match(r"^\d{1,3}(?:\s*[:.)-]|\s+\d|\s+[a-ex]\b)", linha):
                 viu_resposta = True
+            if viu_resposta and re.match(r"^provas?\s+(?:ii|2)\s*(?:e|&)\s*(?:iii|3)\b", linha):
+                fim = i
+                break
             if viu_resposta and _cabecalho_cargo(linhas, i):
                 fim = i
                 break

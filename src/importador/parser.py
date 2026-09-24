@@ -219,6 +219,21 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
     resultado = segmentar(texto_questoes, _remover_front_matter(texto_original), metadados["banca"])
     candidatos = resultado.candidatos
     tem_alternativas = resultado.tem_alternativas
+    contexto_inicial = ""
+    if candidatos:
+        primeiro_bloco = candidatos[0].strip()
+        marcador_inicial = _MARCADOR_QUESTAO.match(primeiro_bloco)
+        corpo_inicial = primeiro_bloco[marcador_inicial.end():] if marcador_inicial else primeiro_bloco
+        prefixo_enunciado = _juntar_linhas(_partes_alternativas(corpo_inicial)[0]).strip()
+        ancora = re.sub(r"\s+", " ", prefixo_enunciado[:90]).strip()
+        if len(ancora) >= 30:
+            padrao_ancora = r"\s*".join(re.escape(palavra) for palavra in ancora.split())
+            ocorrencia = re.search(padrao_ancora, texto_questoes, re.IGNORECASE)
+            if ocorrencia:
+                contexto_inicial = texto_questoes[:ocorrencia.start()].strip()
+                contexto_inicial = re.sub(r"(?m)^\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-ZÁÉÍÓÚÂÊÔÃÕÇ /-]{1,55}\s*$", "", contexto_inicial).strip()
+                if len(contexto_inicial) < 180 or len(re.findall(r"[.!?](?:\s|$)", contexto_inicial)) < 2:
+                    contexto_inicial = ""
     logger.info("Perfil de importação: %s", resultado.perfil)
     if resultado.aviso:
         logger.warning(resultado.aviso)
@@ -242,6 +257,11 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
         if posicao_bloco >= 0:
             cursor_fonte = posicao_bloco + len(prefixo_fonte)
         enunciado = _juntar_linhas(partes[0])
+        if contexto_inicial and re.search(
+            r"(?i)\b(?:do|no|neste|ao|sobre o|sobre|quanto ao|a partir do|com base no|em relação ao|pelo)\s+texto\b|\bde acordo com (?:o )?texto\b|\btexto\s+(?:a seguir|abaixo|acima|precedente)\b",
+            enunciado,
+        ) and contexto_inicial not in enunciado:
+            enunciado = contexto_inicial + "\n\n" + enunciado
         alternativas = []
         for indice in range(1, len(partes), 2):
             if indice + 1 < len(partes):
