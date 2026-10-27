@@ -3,7 +3,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 
-from src.importador.validacao import associar_gabaritos
+from src.importador.validacao import associar_gabaritos, numero_oficial_explicitamente_extraido
 
 
 class EstadoImportacao(Enum):
@@ -85,7 +85,11 @@ class ImportacaoSession:
     def classificar(self, inicio, fim, disciplina, topico):
         if inicio > fim or not disciplina.strip():
             raise ValueError("Informe uma disciplina e um intervalo válido.")
-        indices = [i for i in self.pendentes if inicio <= int(self.questoes[i].get("numero", i + 1)) <= fim]
+        indices = []
+        for i in self.pendentes:
+            numero, motivo = numero_oficial_explicitamente_extraido(self.questoes[i])
+            if numero is not None and inicio <= numero <= fim:
+                indices.append(i)
         for i in indices:
             self.questoes[i].update(disciplina=disciplina.strip(), topico=topico.strip())
         return len(indices)

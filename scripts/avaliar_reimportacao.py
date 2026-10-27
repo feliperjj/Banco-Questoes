@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE = ROOT / "data" / "questoes.db"
-REPORT = ROOT / "reports" / "reimportacao_samples.json"
-OUT = ROOT / "reports" / "avaliacao_reimportacao.json"
+sys.path.insert(0, str(ROOT))
+from src.config import DB_PATH, REPORTS_DIR
+
+DATABASE = DB_PATH
+REPORT = REPORTS_DIR / "reimportacao_samples.json"
+OUT = REPORTS_DIR / "avaliacao_reimportacao.json"
 
 
 def _chave(caminho: str) -> str:

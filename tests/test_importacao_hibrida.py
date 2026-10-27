@@ -33,8 +33,8 @@ def test_intervalo_explicito_reutiliza_texto_sem_vazar_para_outra_questao():
     texto='Texto para as questões 1 a 2\n'+('Um texto comum com informações relevantes. '*5)+'\n'
     texto+='\n'.join(f'QUESTÃO {n}\nEscolha a afirmação correta.\nA) Uma\nB) Outra' for n in range(1,4))
     qs=parsear_questoes(texto)
-    assert 'Um texto comum' in qs[0]['enunciado'] and 'Um texto comum' in qs[1]['enunciado']
-    assert 'Um texto comum' not in qs[2]['enunciado']
+    assert 'Um texto comum' in qs[0]['texto_apoio'] and 'Um texto comum' in qs[1]['texto_apoio']
+    assert 'Um texto comum' not in qs[2]['texto_apoio']
 
 
 def test_avisos_ocr_chegam_a_revisao():
@@ -95,11 +95,11 @@ def test_embrapa_cem_itens_e_texto_base_entre_colunas(nome):
     qs=parsear_questoes(extrair_texto_pdf(str(p)),str(p))
     assert [q['numero'] for q in qs]==list(range(1,101))
     assert all(q['tipo']=='certo_errado' for q in qs)
-    assert 'Presumivelmente' in qs[0]['enunciado']
-    assert 'Presumivelmente' in qs[4]['enunciado']
-    assert 'Climate change' in qs[12]['enunciado']
-    assert 'Presumivelmente' not in qs[12]['enunciado']
-    assert 'Climate change' not in qs[40]['enunciado']
+    assert 'Presumivelmente' in qs[0]['texto_apoio']
+    assert 'Presumivelmente' in qs[4]['texto_apoio']
+    assert 'Climate change' in qs[12]['texto_apoio']
+    assert 'Presumivelmente' not in qs[12]['texto_apoio']
+    assert 'Climate change' not in qs[40]['texto_apoio']
     assert not any(q['enunciado'].endswith(('Conhecimentos Gerais','Conhecimentos Complementares')) for q in qs)
 
 
@@ -149,9 +149,9 @@ def test_texto_rotulado_repetido_usa_ocorrencia_mais_proxima():
     texto='Texto 1\n'+('Um contexto sobre agricultura. '*5)+'\nQUESTÃO 1\nConsidere o texto 1 e assinale a resposta.\nA) Uma\nB) Outra\n'
     texto+='Texto 1\n'+('Outro contexto sobre computação. '*5)+'\nQUESTÃO 2\nConsidere o texto 1 e assinale a resposta.\nA) Uma\nB) Outra'
     qs=parsear_questoes(texto)
-    assert 'Um contexto sobre agricultura' in qs[0]['enunciado']
-    assert 'Outro contexto sobre computação' not in qs[0]['enunciado']
-    assert 'Outro contexto sobre computação' in qs[1]['enunciado']
+    assert 'Um contexto sobre agricultura' in qs[0]['texto_apoio']
+    assert 'Outro contexto sobre computação' not in qs[0]['texto_apoio']
+    assert 'Outro contexto sobre computação' in qs[1]['texto_apoio']
 
 
 def test_grade_provas_acima_de_quatro_por_posicao_do_cabecalho():
@@ -169,8 +169,8 @@ def test_caixas_em_duas_colunas_preservam_cinquenta_itens_fepese():
     if not p.exists(): pytest.skip('PDF local')
     qs=parsear_questoes(extrair_texto_pdf(str(p)),str(p))
     assert [q['numero'] for q in qs]==list(range(1,51))
-    assert 'Taxa de desemprego' in qs[0]['enunciado']
-    assert 'Extensão Rural é um processo' not in qs[0]['enunciado']
+    assert 'Taxa de desemprego' in qs[0]['texto_apoio']
+    assert 'Extensão Rural é um processo' not in qs[0]['texto_apoio']
     assert all('SQUARE' not in a['texto'] for q in qs for a in q.get('alternativas') or [])
 
 

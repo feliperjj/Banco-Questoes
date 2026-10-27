@@ -13,7 +13,7 @@ from src.importador.parser import parsear_questoes
 
 def assinatura(questoes):
     dados = [{k: v for k, v in q.items()
-              if k not in {"perfil_importacao", "aviso_importacao", "perfil_extracao", "diagnostico_importacao"}} for q in questoes]
+              if k not in {"perfil_importacao", "aviso_importacao", "perfil_extracao", "diagnostico_importacao", "ordem_visual"}} for q in questoes]
     return hashlib.sha256(json.dumps(dados, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 

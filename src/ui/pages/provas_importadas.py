@@ -1,6 +1,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 import src.models.questoes_repo as repo
+from src.ui.components.imported_exam_preview import ImportedExamPreviewDialog
 
 
 class ProvasImportadasPage(QWidget):
@@ -26,7 +28,7 @@ class ProvasImportadasPage(QWidget):
 
         titulo = QLabel("Provas importadas")
         titulo.setObjectName("page-title")
-        subtitulo = QLabel("Escolha uma prova importada para resolvê-la na ordem original.")
+        subtitulo = QLabel("Consulte as questões de cada prova e acompanhe a liberação para resolver.")
         subtitulo.setObjectName("page-subtitle")
         layout.addWidget(titulo)
         layout.addWidget(subtitulo)
@@ -97,36 +99,36 @@ class ProvasImportadasPage(QWidget):
             pronta = bool(prova.get("pronta"))
             if pronta:
                 status_texto = "Pronta para resolver"
-                acao_texto = "Fazer prova"
             else:
-                faltantes = prova["qtd_questoes"] - prova["qtd_avaliaveis"]
                 status_texto = (
-                    f"{faltantes} questão(ões) sem gabarito"
+                    f"{prova['qtd_avaliaveis']}/{prova['qtd_questoes']} verificadas · treino parcial disponível"
+                    if 0 < prova.get("qtd_avaliaveis", 0) < prova.get("qtd_questoes", 0) else
+                    "Revisão pendente"
                     if prova["qtd_questoes"]
                     else "Sem questões importadas"
                 )
-                acao_texto = "Indisponível"
+                sem_gabarito = prova.get("qtd_sem_gabarito", 0)
+                if sem_gabarito:
+                    status_texto += f"\n{sem_gabarito} sem gabarito salvo"
             status = QTableWidgetItem(status_texto)
             status.setTextAlignment(Qt.AlignCenter)
+            status.setToolTip(
+                f"{prova.get('qtd_com_gabarito', 0)}/{prova['qtd_questoes']} com gabarito salvo. "
+                f"{prova['qtd_avaliaveis']}/{prova['qtd_questoes']} liberadas após conferência. "
+                "Um gabarito salvo pode ainda precisar de confirmação no original."
+            )
             self.tabela.setItem(row, 2, status)
 
-            if not pronta:
-                indisponivel = QLabel(acao_texto)
-                indisponivel.setObjectName("table-completed-label")
-                indisponivel.setAlignment(Qt.AlignCenter)
-                self.tabela.setCellWidget(row, 3, indisponivel)
-                continue
-
-            botao = QPushButton(acao_texto)
+            botao = QPushButton("Ver questões")
             botao.setObjectName("table-action-button")
             botao.setMinimumWidth(132)
             botao.setMaximumWidth(154)
             botao.setFixedHeight(40)
             botao.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
-            botao.setToolTip("Iniciar uma tentativa desta prova importada")
+            botao.setToolTip("Consultar enunciados, alternativas e imagens sem iniciar uma tentativa")
             botao.setCursor(Qt.PointingHandCursor)
             botao.clicked.connect(
-                lambda checked=False, item=dict(prova): self.fazer_prova(item)
+                lambda checked=False, item=dict(prova): self.ver_questoes(item)
             )
             container = QWidget()
             container.setObjectName("table-action-container")
@@ -137,6 +139,20 @@ class ProvasImportadasPage(QWidget):
             container_layout.addWidget(botao, 0, Qt.AlignCenter)
             container_layout.addStretch()
             self.tabela.setCellWidget(row, 3, container)
+
+    def ver_questoes(self, prova):
+        try:
+            if prova.get("origem_tipo") == "lote_importado":
+                questoes = repo.consultar_questoes_importadas(questao_ids=prova["questao_ids"])
+            else:
+                questoes = repo.consultar_questoes_importadas(prova["id"])
+        except ValueError as exc:
+            QMessageBox.warning(self, "Não foi possível consultar a prova", str(exc))
+            return
+        dialog = ImportedExamPreviewDialog(prova, questoes, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.fazer_prova(prova)
+        self.carregar_provas()
 
     def fazer_prova(self, prova):
         nome = prova["nome"]
@@ -159,9 +175,17 @@ class ProvasImportadasPage(QWidget):
 
         try:
             if prova.get("origem_tipo") == "lote_importado":
-                tentativa_prova_id = repo.criar_prova_a_partir_de_questoes(
-                    nome,
-                    prova["questao_ids"],
+                if 0 < prova.get("qtd_avaliaveis", 0) < prova.get("qtd_questoes", 0):
+                    tentativa_prova_id = repo.criar_prova_parcial_importada(
+                        nome, questao_ids=prova["questao_ids"]
+                    )
+                else:
+                    tentativa_prova_id = repo.criar_prova_a_partir_de_questoes(
+                        nome, prova["questao_ids"]
+                    )
+            elif 0 < prova.get("qtd_avaliaveis", 0) < prova.get("qtd_questoes", 0):
+                tentativa_prova_id = repo.criar_prova_parcial_importada(
+                    nome, prova_cadastrada_id=prova["id"]
                 )
             else:
                 tentativa_prova_id = repo.criar_prova(
@@ -176,7 +200,8 @@ class ProvasImportadasPage(QWidget):
             self.carregar_provas()
             return
 
-        execucao.iniciar(tentativa_prova_id, nome)
+        nome_execucao = repo.obter_prova(tentativa_prova_id)["nome"]
+        execucao.iniciar(tentativa_prova_id, nome_execucao)
         indice = stacked.indexOf(execucao)
         stacked.setCurrentIndex(indice)
         menu = getattr(self.window(), "menu", None)

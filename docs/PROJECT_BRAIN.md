@@ -314,3 +314,62 @@ inteira. O recorte usa o texto da referência e os limites da questão/coluna;
 figuras complexas ainda exigem conferência na fonte. Os arquivos são gravados
 com sufixo `_crop` para não substituir imagens antigas já referenciadas pelo
 banco local.
+
+### 2026-10-26 — Origem, versões e liberação confiável
+
+- `scripts/diagnosticar_confiabilidade.py` abre o banco em modo somente leitura,
+  registra integridade, fontes, imagens, composição, tentativas e casos de
+  referência. Número oficial, ordem na prova e ID interno são reportados em
+  campos distintos. Um diagnóstico ou hash de extração não certifica conteúdo.
+- `DocumentoFonte` identifica arquivos por SHA-256. Nome de arquivo não é
+  evidência de banca, cargo, ano ou versão. `EvidenciaQuestao` registra página ou
+  identificador documental, coordenadas, dimensões e rotação.
+- A importação em lote registra fonte, perfil, parâmetros e avisos da extração
+  junto da versão inicial. Anexar nova evidência reabre as revisões de conteúdo e
+  gabarito; uma evidência acrescentada não mantém aprovações antigas.
+- Cada edição por `questoes_repo` cria um novo `QuestaoVersao` com hash e JSON
+  canônico, inclusive alternativas e número oficial. Revisões de conteúdo e de
+  gabarito são registros separados e ligados àquela versão. Estado ausente ou
+  legado permanece pendente/desconhecido.
+- A liberação exige revisão explícita do conteúdo, gabarito definitivo
+  confirmado, estrutura válida e toda fonte de evidência ainda íntegra. A regra
+  é revalidada na criação e no início de tentativa nova, inclusive no
+  repositório; esconder o botão não é controle de domínio.
+- `ProvaQuestao` e `Resposta` guardam a versão efetivamente usada. Finalização e
+  nota leem o snapshot, nunca o conteúdo atual. Composição ou tentativa legada
+  sem snapshot não recebe conteúdo histórico presumido e não é finalizada
+  silenciosamente.
+- Antes de criar tabelas ou aplicar migração estrutural em banco existente,
+  `init_db` cria snapshot via API de backup SQLite, verifica integridade,
+  contagens, chaves estrangeiras e restauração em cópia. Falha no backup
+  interrompe a inicialização antes da primeira alteração.
+- Reimportação não é limpeza: preserve IDs, versões, imagens, tentativas e
+  correções manuais. Antes de testar uma aplicação no acervo real, faça backup
+  verificável do banco e dos arquivos que o script pode sobrescrever.
+- `scripts/reimportar_samples.py` agora produz apenas uma proposta comparativa
+  em leitura; recortes são gravados em pasta temporária exclusiva de `reports/`.
+  A ordem existente é somente candidata de correspondência, e nenhuma proposta
+  é aplicada nem altera histórico.
+
+### 2026-10-26 — Funil de análise, evidência e numeração explícita
+
+- O campo `numero` da extração representa exclusivamente o marcador oficial explícito. `ordem_visual` serve para localizar um bloco sem inventar sua numeração; associação de gabarito exige número e escopo inequívocos.
+- `assess_version` é a política explicável de liberação e retorna todos os bloqueios, alertas, estado de conteúdo/gabarito e próxima etapa. `version_is_eligible` permanece apenas como adaptador. A análise é somente leitura.
+- Conteúdo, contexto/recurso visual e gabarito são partes de evidência distintas. A conferência direta ao serviço valida IDs, versão, escopo, fonte, página, região, dimensões e rotação; PDF com hash alterado bloqueia. DOCX usa identificador de parágrafo/tabela e não promete paginação estável.
+- Snapshot legado sem hash de imagem mantém compatibilidade sem reescrita; o recurso visual continua pendente com integridade desconhecida até nova conferência. Regras de diagnóstico têm versão; resoluções de suspeita guardam justificativa, responsável e fingerprint da evidência.
+- A tela de questões oferece ação de análise/conferência. O diálogo mostra a versão congelada, motivos, originais por finalidade, registro de evidência, decisões separadas para conteúdo/gabarito e resolução de suspeitas. PDF rotacionado usa dimensões e rotação lidas da página original.
+- Testes usam banco, logs, relatórios, imagens e diretórios temporários próprios; `BANCO_QUESTOES_TEST_MODE=1` recusa caminhos sob `data/` real. Use `-p no:tmpdir` neste ambiente Windows; a fixture `tmp_path` local evita diretórios de sistema inacessíveis.
+- Reimportação de samples gera propostas, não aprovação nem sobrescrita. `--stage` persiste em `reports/reimportacao_staging_v2.sqlite3`; `scripts/gerenciar_staging_reimportacao.py` lista, registra decisão humana e aplica somente propostas aprovadas, após revalidar fonte, vínculo e snapshot atual e criar backup consistente. A aplicação cria versão pendente e preserva a anterior.
+- Estado, comandos, contagens reais, backup e limitações desta execução: `docs/RELATORIO_FUNIL_ANALISES_LUNA.md`. O diagnóstico JSON/Markdown do acervo é gerado pelo script somente leitura `scripts/diagnosticar_confiabilidade.py`.
+- Provas importadas têm consulta por **Ver questões**, inclusive durante a revisão, sem criar tentativa ou salvar respostas. `qtd_com_gabarito`/`qtd_sem_gabarito` medem os valores salvos; `qtd_avaliaveis` mede a liberação pela política. Não rotule questões pendentes de conferência como sem gabarito.
+- Fidelidade observada não equivale ao percentual formalmente liberado. Auditoria completa das 70 questões da Transpetro em `docs/AUDITORIA_VISUAL_TRANSPETRO_2026-10-26.md`: 13 falhas materiais, 2 destaques importantes perdidos, 27 com ruído, 28 sem divergência material observada; 70/70 respostas iguais ao arquivo local, 3/4 recortes corretos. Q68 usa imagem de Q70; a capa informa CESGRANRIO, embora o catálogo diga FGV. Essas constatações não aprovam versões nem corrigem o banco automaticamente.
+
+### 2026-10-27 — Reparação documental e liberação automática autorizada
+
+- O usuário autorizou reparar em lote e liberar somente itens aprovados pela verificação automática contra a fonte. O relatório atualizado é `docs/RELATORIO_REPARACAO_AUTOMATICA_2026-10-27.md`; os relatos anteriores representam estados históricos.
+- Schema 8 registra certificados automáticos separados das revisões humanas. A regra verifica hashes, catálogo/cargo/tipo, número físico, campos extraídos, contexto integral e pixels dos fac-símiles. Rejeições humanas do mesmo conteúdo não podem ser contornadas reaplicando um lote.
+- `scripts/reparar_acervo.py --saida reports/NOME` prepara uma proposta sem alterar o banco. `--aplicar reports/NOME/proposta.json` cria backup SQLite com teste de restauração e aplica em transação; conserva IDs, versões anteriores, composições históricas, tentativas e respostas. `--db` permite validar em cópia; use também `BANCO_QUESTOES_IMAGE_DIR` para isolar os derivados.
+- A apresentação usa recortes do PDF, preservando fórmulas, destaques e tabelas. O texto de apoio é separado e pode ter várias regiões. PDFs e PNGs são vinculados por SHA-256; o renderizador trabalha em processo isolado e reutiliza páginas somente dentro do lote.
+- Texto digital com sobreimpressão ou marca d'água pode ser normalizado para comparação; os pixels exibidos continuam sendo os originais. A cobertura de liberação não representa probabilidade estatística de acerto.
+- A Transpetro foi reparada, incluindo contexto em inglês, fórmula da Q41 e a imagem correta da Q68; sua banca é CESGRANRIO segundo a capa. Provas sem gabarito físico, preliminares, anuladas e itens que não passaram nas verificações continuam com motivos explícitos.
+- Nenhum commit, push ou pull request foi realizado; nunca abrir PR nesta tarefa.

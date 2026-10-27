@@ -78,4 +78,7 @@ C E C E E E C E C C C E C E E C X C E C
 C E C E E E C E C E X E C C C C E E C C
 C E C C C E E C E C C C E E C C E E C X'''
     resultado = extrair_gabaritos_pdf(str(caminho), cargo='CONHECIMENTOS GERAIS COMUNS A TODAS AS ESPECIALIDADES', usar_ocr=False)
-    assert {n: resultado[n] for n in range(1, 101)} == dict(enumerate(esperado.split(), 1))
+    normalizado = {'C': 'Certo', 'E': 'Errado', 'X': 'Anulada'}
+    assert {n: resultado[n] for n in range(1, 101)} == {
+        n: normalizado[token] for n, token in enumerate(esperado.split(), 1)
+    }

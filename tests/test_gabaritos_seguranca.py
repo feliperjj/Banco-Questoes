@@ -156,6 +156,9 @@ def test_prova_gerada_exclui_gabarito_de_outro_tipo(tmp_path):
     for resposta in ('A', 'B', 'D'):
         repo.criar_questao(dict(enunciado='Julgue a afirmação.', tipo='certo_errado', gabarito=resposta))
     valido = repo.criar_questao(dict(enunciado='Afirmação válida.', tipo='certo_errado', gabarito='Certo'))
+    fonte = tmp_path / 'fonte.pdf'
+    from helpers import approve_with_evidence
+    approve_with_evidence(valido, fonte, 'Certo')
     prova = repo.criar_prova('Sem respostas incompatíveis', {}, 10, 0)
     assert [q['id'] for q in repo.buscar_questoes_da_prova(prova)] == [valido]
 

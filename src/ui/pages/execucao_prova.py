@@ -1,10 +1,12 @@
 import logging
 from pathlib import Path
 from src.ui.components.statement import formatar_enunciado
+from src.ui.components.source_facsimile import SourceFacsimile
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap, QTextBlockFormat, QTextCursor
 from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QToolButton, QVBoxLayout, QWidget
+from shiboken6 import isValid
 
 import src.models.questoes_repo as repo
 import src.models.revisao_service as revisao_svc
@@ -89,6 +91,20 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_imagem.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.lbl_imagem.hide()
         enunciado_layout.addWidget(self.lbl_imagem)
+        self.original_view = SourceFacsimile()
+        self.original_view.setMaximumHeight(360)
+        self.original_view.hide()
+        enunciado_layout.addWidget(self.original_view)
+        self.original_context_button = QToolButton()
+        self.original_context_button.setText("Texto de apoio original")
+        self.original_context_button.setCheckable(True)
+        self.original_context_button.hide()
+        enunciado_layout.addWidget(self.original_context_button)
+        self.original_context_view = SourceFacsimile()
+        self.original_context_view.setMaximumHeight(260)
+        self.original_context_view.hide()
+        self.original_context_button.toggled.connect(self.original_context_view.setVisible)
+        enunciado_layout.addWidget(self.original_context_view)
         cartao_layout.addWidget(self.bloco_enunciado)
         self.alternativas_frame = QFrame()
         self.alternativas_frame.setObjectName("exam-options-card")
@@ -211,6 +227,11 @@ class ExecucaoProvaPage(QWidget):
 
     def _mostrar_estado_inicial(self):
         self.timer.stop()
+        self.original_view.hide()
+        self.original_context_view.hide()
+        self.original_context_button.hide()
+        self.original_context_button.setChecked(False)
+        self.lbl_enunciado.show()
         self.lbl_info.setText("Nenhuma prova em andamento")
         self.lbl_progresso.setText("Escolha uma prova para começar")
         self.lbl_tipo_questao.setText("MODO PROVA")
@@ -235,6 +256,15 @@ class ExecucaoProvaPage(QWidget):
         if not self.questoes:
             QMessageBox.critical(self, "Erro", "Esta prova não possui questões.")
             return
+        legadas = sum(bool(q.get("snapshot_legado_desconhecido")) for q in self.questoes)
+        if legadas:
+            QMessageBox.warning(
+                self,
+                "Versão histórica desconhecida",
+                f"{legadas} questão(ões) desta prova não possuem snapshot da versão realmente usada. "
+                "O conteúdo atual pode não ser o da tentativa original. A tentativa aberta será preservada; "
+                "o sistema não finalizará o resultado usando uma versão presumida.",
+            )
         self.tentativa_id = repo.iniciar_tentativa(prova_id)
         configuracao = repo.obter_prova(prova_id) or {}
         self.tempo_limite_seg = max(0, int(configuracao.get("tempo_limite_min") or 0)) * 60
@@ -293,8 +323,23 @@ class ExecucaoProvaPage(QWidget):
         else:
             self.lbl_imagem.clear()
             self.lbl_imagem.hide()
+        presentation = q.get("apresentacao_fonte")
+        original = bool(presentation and presentation.get("questao"))
+        self.original_view.setVisible(original)
+        self.lbl_enunciado.setVisible(not original)
+        self.original_context_button.setChecked(False)
+        self.original_context_view.hide()
+        self.original_context_button.setVisible(bool(original and presentation.get("contexto")))
+        if original:
+            self.lbl_imagem.hide()
+            self.original_view.set_assets(presentation["questao"])
+            self.original_context_view.set_assets(presentation.get("contexto", []))
+            self._context_sections["texto_apoio"][0].hide()
+            self.lbl_tipo_questao.setText("ORIGINAL · VERIFICAÇÃO AUTOMÁTICA")
         self.limpar_alternativas()
         opcoes = [(a["letra"], f"{a['letra']})  {a['texto']}") for a in q.get("alternativas", [])] if q["tipo"] == "multipla_escolha" else [("Certo", "Certo"), ("Errado", "Errado")]
+        if original and q["tipo"] == "multipla_escolha":
+            opcoes = [(value, f"Marcar alternativa {value}") for value, _ in opcoes]
         if not opcoes:
             opcoes = [(letra, letra) for letra in "ABCDE"]
         for valor, rotulo in opcoes:
@@ -400,6 +445,10 @@ class ExecucaoProvaPage(QWidget):
         QTimer.singleShot(0, self._ajustar_alturas_conteudo)
 
     def _ajustar_alturas_conteudo(self):
+        # resizeEvent agenda este ajuste para o próximo ciclo do Qt. A página
+        # pode ser descartada antes desse callback, então ignore widgets já destruídos.
+        if not isValid(self):
+            return
         self._ajustar_altura_texto(self.lbl_enunciado, 66, 360)
         for section, _, editor in self._context_sections.values():
             if section.isVisible() and editor.isVisible():
@@ -458,7 +507,12 @@ class ExecucaoProvaPage(QWidget):
         self._finalizar_tentativa()
 
     def _finalizar_tentativa(self):
-        resultado = repo.finalizar_tentativa(self.tentativa_id, self.respostas_memoria, self.tempo_gasto)
+        try:
+            resultado = repo.finalizar_tentativa(self.tentativa_id, self.respostas_memoria, self.tempo_gasto)
+        except ValueError as erro:
+            QMessageBox.warning(self, "Tentativa preservada", str(erro))
+            self.em_andamento = True
+            return
         for errada in resultado["erradas"]:
             revisao_svc.registrar_erro(errada["id"])
         logger.info("Tentativa %s finalizada: nota %.1f", self.tentativa_id, resultado["nota"])

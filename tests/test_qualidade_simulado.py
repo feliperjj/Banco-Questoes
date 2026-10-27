@@ -25,6 +25,8 @@ def test_nova_prova_exclui_fusao_lacuna_e_alternativa_unica(tmp_path):
     for letras, textos in [('A', ['6 b) 5 c) 3 d) 1']), ('ABDE', ['Uma','Outra c) perdida','Quarta','Quinta']), ('AB', ['Uma','Outra'])]:
         ids.append(repo.criar_questao(dict(enunciado='Assinale a alternativa correta.', tipo='multipla_escolha',gabarito='A',
                     alternativas=[dict(letra=l,texto=t) for l,t in zip(letras,textos)])))
+    from tests.test_integridade_gabarito import _aprovar_fixture
+    _aprovar_fixture(ids[2], tmp_path / 'approved', answer='A')
     assert repo.contar_questoes_elegiveis() == 1
     pid = repo.criar_prova('Segura',{},10,0)
     assert [q['id'] for q in repo.buscar_questoes_da_prova(pid)] == [ids[2]]
@@ -63,9 +65,11 @@ def test_navegacao_reinicia_scroll_e_restabelece_selecao(tmp_path, qt_applicatio
     from PySide6.QtTest import QTest
     from src.ui.pages.execucao_prova import ExecucaoProvaPage
     init_db(str(tmp_path/'scroll.db'))
+    from tests.test_integridade_gabarito import _aprovar_fixture
     for n in range(2):
-        repo.criar_questao(dict(enunciado=f'Questão {n}',tipo='multipla_escolha',gabarito='A',
+        questao_id = repo.criar_questao(dict(enunciado=f'Questão {n}',tipo='multipla_escolha',gabarito='A',
              alternativas=[dict(letra=l,texto=('Texto longo para forçar rolagem. '*30)) for l in 'ABCDE']))
+        _aprovar_fixture(questao_id, tmp_path / f'approved-scroll-{n}', answer='A')
     pid=repo.criar_prova('Rolagem',{},2,0)
     page=ExecucaoProvaPage()
     page.resize(760,640)

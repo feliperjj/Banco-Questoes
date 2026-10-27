@@ -43,7 +43,7 @@ def test_contexto_nomeado_ignora_numeros_de_linhas():
     qs = parsear_questoes(apoio+'QUESTÃO 1\nAvalie a passagem apresentada.\n'+alternativas()+
                          '\nQUESTÃO 2 Na mesma passagem, avalie a conclusão.\n'+alternativas())
     assert [q['numero'] for q in qs] == [1,2]
-    assert all('Uma passagem longa' in q['enunciado'] for q in qs)
+    assert all('Uma passagem longa' in q['texto_apoio'] for q in qs)
 
 
 def test_contexto_duas_questoes_nao_vaza_para_alternativa_anterior():
@@ -53,7 +53,7 @@ def test_contexto_duas_questoes_nao_vaza_para_alternativa_anterior():
     texto += '\nQUESTÃO 19\nQual o total de vendas?\n'+alternativas()
     qs = parsear_questoes(texto)
     assert 'Dados contábeis' not in qs[0]['alternativas'][-1]['texto']
-    assert all('Dados contábeis' in q['enunciado'] for q in qs[1:])
+    assert all('Dados contábeis' in q['texto_apoio'] for q in qs[1:])
 
 
 def test_marca_diagonal_upright_nao_contamina_corpo():
@@ -104,9 +104,9 @@ def test_cadernos_lacunas_sequencia_oficial(arquivo,total):
     qs = parsear_questoes(extrair_texto(str(fonte)))
     assert [q['numero'] for q in qs] == list(range(1,total+1))
     if total==120:
-        assert 'Na longa e inconclusiva busca' in qs[0]['enunciado']
-        assert 'Cresci brincando' not in qs[8]['enunciado']
-        assert 'Cresci brincando' in qs[9]['enunciado']
+        assert 'Na longa e inconclusiva busca' in qs[0]['texto_apoio']
+        assert 'Cresci brincando' not in qs[8]['texto_apoio']
+        assert 'Cresci brincando' in qs[9]['texto_apoio']
         assert all('PÁGINA' not in q['enunciado'] for q in qs)
     if arquivo=='TRANSPETRO.pdf':
         assert 'demanda média diária' in qs[47]['enunciado']

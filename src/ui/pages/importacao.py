@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
 from src.importador.lote import parsear_gabarito_em_lote
 from src.importador.servico import importar_caderno
+from src.importador.validacao import numero_oficial_explicitamente_extraido
 from src.models import questoes_repo as repo
 from src.models.importacao_session import EstadoImportacao, ImportacaoSession, validar_questao
 from src.ui.background import BackgroundTask
@@ -272,7 +273,9 @@ class ImportacaoPage(QWidget):
             return
         cargo = self.cargo_gabarito_input.text().strip() or None
         codigo = self.codigo_gabarito_input.text().strip() or None
-        numeros = {int(q.get("numero", i + 1)) for i, q in enumerate(self.session.questoes)}
+        numeros = {numero for q in self.session.questoes
+                   for numero, motivo in [numero_oficial_explicitamente_extraido(q)]
+                   if numero is not None}
         self.caminho_gabarito = caminho
         self.operation = "gabarito"
         self._start(lambda: extrair_gabaritos_pdf(caminho, codigo, cargo, numeros_esperados=numeros), "Lendo o gabarito. PDFs escaneados podem levar mais tempo.")
@@ -353,8 +356,10 @@ class ImportacaoPage(QWidget):
         if self.ocupada or not self.session.pendentes:
             return
         tokens = parsear_gabarito_em_lote(self.gabarito_lote_input.text())
-        numeros = [int(q.get("numero", i + 1)) for i, q in enumerate(self.session.questoes)]
-        if len(tokens) != len(numeros) or sorted(numeros) != list(range(1, len(tokens) + 1)):
+        numeracoes = [numero_oficial_explicitamente_extraido(q)[0] for q in self.session.questoes]
+        if (None in numeracoes or len(set(numeracoes)) != len(numeracoes)
+                or sorted(numeracoes) != list(range(1, len(tokens) + 1))
+                or len(tokens) != len(numeracoes)):
             self._informar("A sequência precisa cobrir os números oficiais de 1 até o final, sem lacunas ou duplicidades. Use o PDF ou revise individualmente.", True)
             return
         self._finalizar_importacao_gabarito(dict(enumerate(tokens, 1)))
@@ -385,7 +390,9 @@ class ImportacaoPage(QWidget):
         q = self.session.questoes[indice]
         status = "Salva" if indice in self.session.salvas else (q.get("gabarito") or "Sem gabarito")
         resumo = " ".join(q.get("enunciado", "").split())
-        return f"Questão {q.get('numero', indice + 1)}  ·  {status}\n{resumo[:27]}{'…' if len(resumo) > 27 else ''}"
+        numero, motivo = numero_oficial_explicitamente_extraido(q)
+        rotulo = f"Questão {numero}" if numero is not None else f"Item visual {indice + 1} · número pendente"
+        return f"{rotulo}  ·  {status}\n{resumo[:27]}{'…' if len(resumo) > 27 else ''}"
 
     def carregar_edicao(self, item, previous=None):
         self.current_index = item.data(Qt.UserRole) if item else None
@@ -393,7 +400,7 @@ class ImportacaoPage(QWidget):
             q = self.session.questoes[self.current_index]
             self.editor.load(q)
             self.lbl_confianca.setText("Salva no acervo · edite na tela Questões" if self.current_index in self.session.salvas else
-                                      f"Questão {q.get('numero', self.current_index + 1)} · {'Confira o texto extraído' if q.get('confianca') != 'alta' else 'Revise enunciado e alternativas'}")
+                                      f"{self._item_text(self.current_index).splitlines()[0]} · {'Confira o texto extraído' if q.get('confianca') != 'alta' else 'Revise enunciado e alternativas'}")
         else:
             self.editor.load({})
             self.lbl_confianca.setText("Nenhuma questão neste filtro.")
@@ -447,7 +454,8 @@ class ImportacaoPage(QWidget):
                 self.current_index = i
                 self.filtro.setCurrentIndex(0)
                 self._refresh_list()
-                self._informar(f"Questão {self.session.questoes[i].get('numero', i + 1)}: {exc}", True)
+                numero, _ = numero_oficial_explicitamente_extraido(self.session.questoes[i])
+                self._informar(f"Questão {numero if numero is not None else f'na posição visual {i + 1}'}: {exc}", True)
                 return
         sem = sum(not self.session.questoes[i].get("gabarito") for i in indices)
         if sem and QMessageBox.question(self, "Salvar sem gabarito?", f"{sem} questão(ões) ficarão disponíveis para revisão, mas não entrarão em novas provas até receberem um gabarito. Salvar?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
@@ -455,7 +463,23 @@ class ImportacaoPage(QWidget):
         self.session.estado = EstadoImportacao.SALVANDO
         self._sync()
         try:
-            ids = repo.criar_questoes_em_lote([self.session.questoes[i] for i in indices])
+            questoes = [self.session.questoes[i] for i in indices]
+            perfis = sorted({q.get("perfil_extracao", "texto") for q in questoes})
+            perfil_importacao = sorted({q.get("perfil_importacao", "não informado") for q in questoes})
+            diagnosticos = [
+                {"numero": q.get("numero"), "avisos": q.get("aviso_importacao", "")}
+                for q in questoes if q.get("aviso_importacao")
+            ]
+            ids = repo.criar_questoes_em_lote(
+                questoes,
+                source_path=self.session.caminho,
+                extraction_metadata={
+                    "extractor": "src.importador.extrator.extrair_texto",
+                    "profile": "; ".join(perfis),
+                    "parameters": {"perfis_importacao": perfil_importacao},
+                    "diagnostics": diagnosticos,
+                },
+            )
             self.session.marcar_salvas(indices, ids)
             prova_id = self._cadastrar_prova_se_completa()
         except Exception:
@@ -478,7 +502,12 @@ class ImportacaoPage(QWidget):
         form = QFormLayout(dialog)
         form.setRowWrapPolicy(QFormLayout.WrapAllRows)
         inicio, fim = QSpinBox(), QSpinBox()
-        numeros = [int(q.get("numero", i + 1)) for i, q in enumerate(self.session.questoes)]
+        numeros = [numero for q in self.session.questoes
+                   for numero, motivo in [numero_oficial_explicitamente_extraido(q)]
+                   if numero is not None]
+        if not numeros:
+            self._informar("Nenhuma questão possui número oficial extraído; a classificação por intervalo está indisponível.", True)
+            return
         for widget in (inicio, fim):
             widget.setRange(min(numeros), max(numeros))
         fim.setValue(max(numeros))

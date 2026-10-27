@@ -74,9 +74,8 @@ def test_recuos_preservam_contexto_e_nao_anexam_comando_ao_item():
     qs=parsear_questoes(texto)
     assert len(qs)==20
     for q in qs:
-        contexto,item=q['enunciado'].split('\n\nITEM PARA JULGAMENTO\n')
-        assert 'Julgue os itens do texto de apoio.' in contexto
-        assert item=='A justificativa é válida. Segundo os autores.'
+        assert q['texto_apoio']=='Julgue os itens do texto de apoio.'
+        assert q['enunciado']=='A justificativa é válida. Segundo os autores.'
 
 
 def test_pdf_enviado_120_itens_contextos_e_gabaritos():

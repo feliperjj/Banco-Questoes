@@ -27,12 +27,16 @@ O objetivo não é fingir que todo PDF possui o mesmo formato. O objetivo é aut
 - Extração de gabaritos textuais, tabelados e, quando disponível, OCR.
 - OCR CPU com RapidOCR, detecção de grades/células por OpenCV e templates específicos para layouts dos samples.
 - Validação de vínculo por número, cargo/prova e quantidade, com pendências separadas para revisão manual.
+- Número oficial só é preenchido quando aparece explicitamente na fonte; a ordem visual é um localizador separado e nunca desloca vínculos de gabarito.
 - Catálogo versionado de associações e diagnóstico não destrutivo de cobertura por arquivo.
 - Aplicação de gabarito e classificação por intervalos.
 - Edição e exclusão lógica de questões.
 - Busca por enunciado, disciplina, categoria, banca e tipo.
 - Geração de provas aleatórias em uma tela própria, com filtros e limite de tempo.
 - Lista separada de provas importadas, com indicação de gabarito pronto e acesso direto para resolvê-las na ordem original.
+- Fontes PDF identificadas por SHA-256, versões imutáveis de questões e registro separado de evidências e revisões de conteúdo/gabarito.
+- O funil apresenta etapa principal e todos os motivos, mantém conteúdo e gabarito como decisões independentes e exige evidência por parte antes de aprovar.
+- Novas provas usam versões liberadas pela política: revisão humana documentada ou verificação automática rastreável contra o PDF, com fonte íntegra, identidade, número, conteúdo, contexto, alternativas e gabarito conferidos. Preliminar, conflitante ou desconhecido não libera. A verificação automática fica identificada e não cria decisões humanas.
 - Execução com timer, alternativas responsivas e proteção contra finalização duplicada.
 - Histórico de provas concluídas, estatísticas e revisão espaçada.
 - Banco local, sem necessidade de servidor.
@@ -41,6 +45,8 @@ O objetivo não é fingir que todo PDF possui o mesmo formato. O objetivo é aut
 
 - [Caderno técnico](docs/CADERNO_TECNICO.md): evolução, conceito, arquitetura, banco de dados e decisões de código.
 - [Cérebro operacional](docs/PROJECT_BRAIN.md): contratos, checklist de regressão, riscos e matriz de validação.
+- [Plano do funil de análises](docs/PLANO_ACAO_FUNIL_ANALISES_LUNA.md) e [relatório da execução](docs/RELATORIO_FUNIL_ANALISES_LUNA.md): decisões, validações, estado do acervo e pendências humanas.
+- [Reparação automática do acervo](docs/RELATORIO_REPARACAO_AUTOMATICA_2026-10-27.md): resultado atualizado por prova, limites da verificação e backups.
 - [Relatório de reimportação](docs/RELATORIO_REIMPORTACAO_SAMPLES.md): resultado por sample, bancas, disciplinas, gabaritos e pendências.
 - [Screenshots das telas](docs/screenshots/): referência visual da interface.
 
@@ -52,10 +58,11 @@ O caderno explica por que as decisões foram tomadas. O cérebro operacional dev
 2. Confira a prévia, especialmente os itens com confiança média ou baixa.
 3. Se houver gabarito, selecione o PDF correspondente ou cole a sequência de respostas.
 4. Classifique blocos por disciplina e categoria quando o PDF não trouxer esses metadados.
-5. Informe o nome da prova e salve o lote; a prova e o gabarito ficam disponíveis para reutilização.
-6. Em **Gerar Prova**, monte simulados com questões aleatórias e filtros do banco.
-7. Em **Provas importadas**, escolha uma prova pronta para resolver a composição original.
-8. Resolva a prova e confira resultado, estatísticas e revisão.
+5. Salve o lote como pendente. A liberação pode ocorrer pela verificação automática documentada contra a fonte ou pela ação **Conferir com originais**, com decisões separadas sobre conteúdo e gabarito.
+6. A composição completa fica disponível quando todas as questões estão liberadas. Em uma prova parcial, **Resolver N verificadas** cria um treino identificado com apenas os itens elegíveis, preservando a ordem e as versões.
+7. Em **Gerar Prova**, monte simulados com questões aleatórias e filtros do banco.
+8. Em **Provas importadas**, escolha uma prova pronta para resolver a composição original.
+9. Resolva a prova e confira resultado, estatísticas e revisão.
 
 Se o gabarito puder ser colado manualmente:
 
@@ -223,6 +230,7 @@ Antes de alterar comportamento existente, consulte o [cérebro operacional](docs
 - PDFs com layouts muito diferentes podem exigir uma nova heurística e um caso de teste específico.
 - Tentativas interrompidas podem ser retomadas pelo botão **Retomar prova**, com respostas, questão atual e tempo ativo salvos. O tempo com o aplicativo fechado não é contabilizado.
 - A revisão humana continua necessária quando o PDF não contém texto confiável ou quando o gabarito é ambíguo.
+- Questões antigas recebem snapshots com origem e revisão desconhecidas; elas não são liberadas automaticamente após a migração. O script `scripts/diagnosticar_confiabilidade.py` produz inventário somente leitura e mantém explícita a diferença entre ID, posição e número oficial.
 
 ## Licença
 
@@ -288,3 +296,5 @@ python -m scripts.verificar_ui_reforma --output outputs/ui-125
 ### Importação híbrida por formato
 
 O importador combina perfis especializados, segmentação geral e revisão de conflitos. Consulte [formatos, limites e diagnóstico](docs/IMPORTACAO_HIBRIDA.md). O comando `python scripts/diagnosticar_formato.py caderno.pdf --saida diagnostico.json` permite inspecionar a extração sem gravar no banco.
+
+Para comparar uma nova extração dos PDFs locais com o acervo sem aplicar alterações, execute `python scripts/reimportar_samples.py`. A proposta não atualiza o banco; diferenças e correspondências por ordem continuam pendentes de conferência.

@@ -65,9 +65,15 @@ def test_editor_rejeita_alternativa_correta_ausente(banco, app, monkeypatch):
     assert avisos and Questao.select().count() == 0
 
 
-def test_disponibilidade_igual_a_selecao(banco, app):
+def test_disponibilidade_igual_a_selecao(banco, app, tmp_path):
+    elegivel = None
     for resposta in [None, 'Anulada', 'Certo']:
-        repo.criar_questao({'enunciado': 'Teste', 'tipo': 'certo_errado', 'gabarito': resposta})
+        questao_id = repo.criar_questao({'enunciado': 'Teste', 'tipo': 'certo_errado', 'gabarito': resposta})
+        if resposta == 'Certo':
+            elegivel = questao_id
+    fonte = tmp_path / 'fonte.pdf'
+    from helpers import approve_with_evidence
+    approve_with_evidence(elegivel, fonte, 'Certo')
     assert repo.contar_questoes_elegiveis() == 1
     pagina = GeradorProvaPage()
     assert pagina.lbl_disponiveis.text().startswith('1 ')
@@ -76,8 +82,10 @@ def test_disponibilidade_igual_a_selecao(banco, app):
 
 
 def test_retomada_preserva_respostas_posicao_tempo_e_finaliza(banco, app, monkeypatch):
-    for _ in range(2):
-        repo.criar_questao({'enunciado': 'Teste', 'tipo': 'certo_errado', 'gabarito': 'Certo'})
+    from tests.test_integridade_gabarito import _aprovar_fixture
+    for indice in range(2):
+        questao = repo.criar_questao({'enunciado': 'Teste', 'tipo': 'certo_errado', 'gabarito': 'Certo'})
+        _aprovar_fixture(questao, __import__('pathlib').Path('reports') / f'retomada-{indice}')
     prova = repo.criar_prova('Retomada', {}, 2, 1)
     pagina = ExecucaoProvaPage()
     pagina.iniciar(prova, 'Retomada')
@@ -106,8 +114,10 @@ def test_retomada_preserva_respostas_posicao_tempo_e_finaliza(banco, app, monkey
         repo.salvar_progresso(tentativa, {}, 0, 0)
 
 
-def test_progresso_rejeita_questao_de_outra_prova(banco):
+def test_progresso_rejeita_questao_de_outra_prova(banco, tmp_path):
     qid = repo.criar_questao({'enunciado': 'Teste', 'tipo': 'certo_errado', 'gabarito': 'Certo'})
+    from tests.test_integridade_gabarito import _aprovar_fixture
+    _aprovar_fixture(qid, tmp_path)
     prova = repo.criar_prova('Teste', {}, 1, 0)
     tentativa = repo.iniciar_tentativa(prova)
     with pytest.raises(ValueError, match='pertence'):

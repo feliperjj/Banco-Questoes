@@ -15,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.config import REPORTS_DIR
+
 import pdfplumber
 
 from src.importador.catalogo import carregar_catalogo, normalizar_chave
@@ -29,7 +31,7 @@ from src.importador.perfis.documentos import (
 
 SAMPLES = ROOT / "samples"
 CATALOGO = carregar_catalogo(ROOT / "config" / "gabaritos.json", base_dir=SAMPLES)
-OUT = ROOT / "reports" / "catalogo_padroes.json"
+OUT = REPORTS_DIR / "catalogo_padroes.json"
 
 
 def _perfil_de_dict(dados: dict) -> PerfilDocumento:

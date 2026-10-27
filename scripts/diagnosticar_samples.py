@@ -10,10 +10,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.config import REPORTS_DIR
+
 from src.importador.catalogo import carregar_catalogo, normalizar_chave
 from src.importador.diagnostico import diagnosticar_caderno, salvar_relatorio
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
 from src.importador.parser import parsear_questoes
+from src.importador.validacao import numero_oficial_explicitamente_extraido
 
 
 def main():
@@ -42,7 +45,9 @@ def main():
             arquivo = samples / registro["gabarito"]
             gabarito_candidato = registro["gabarito"]
             if arquivo.exists():
-                numeros = {int(q.get("numero", indice)) for indice, q in enumerate(questoes, 1)}
+                numeros = {numero for q in questoes
+                           for numero, motivo in [numero_oficial_explicitamente_extraido(q)]
+                           if numero is not None}
                 gabaritos = extrair_gabaritos_pdf(
                     str(arquivo), codigo, cargo or None,
                     usar_ocr=args.ocr, numeros_esperados=numeros,
@@ -61,7 +66,7 @@ def main():
         ))
         auditoria.append({"arquivo": str(caminho.relative_to(samples)), "texto": texto, "questoes": questoes, "gabaritos": gabaritos})
         print(f"{caminho.name}: {len(questoes)} questões, {relatorios[-1]['respostas_vinculadas']} vínculos", flush=True)
-    out = ROOT / "reports"
+    out = REPORTS_DIR
     out.mkdir(exist_ok=True)
     salvar_relatorio(relatorios, out / "diagnostico_samples.json", out / "diagnostico_samples.md")
     (out / "auditoria_extracao.json").write_text(json.dumps(auditoria, ensure_ascii=False, indent=2), encoding="utf-8")

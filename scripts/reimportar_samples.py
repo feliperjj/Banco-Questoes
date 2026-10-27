@@ -17,32 +17,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.db.database import db, init_db
-from src.db.models import (
-    ALL_MODELS,
-    ProgressoTentativa,
-    Alternativa,
-    Prova,
-    ProvaCadastrada,
-    ProvaCadastradaQuestao,
-    ProvaQuestao,
-    Questao,
-    Resposta,
-    RevisaoEspacada,
-    Tentativa,
-)
+from src.config import DB_PATH, REPORTS_DIR
 from src.importador.extrator import extrair_gabaritos_pdf, extrair_texto
 from src.importador.gabaritos import diagnosticar_gabarito_pdf
 from src.importador.perfis.documentos import classificar_caderno, PerfilDocumento, pontuar_associacao
 from src.importador.parser import parsear_questoes, quantidade_declarada
 from src.importador.imagens import anexar_imagens_referenciadas
 from src.importador.catalogo import carregar_catalogo, normalizar_chave
-from src.importador.validacao import associar_gabaritos, validar_gabarito
+from src.importador.validacao import associar_gabaritos, numero_oficial_explicitamente_extraido, validar_gabarito
+from src.importador.reimportacao_staging import stage_proposals
 
 
 SAMPLES = ROOT / "samples"
-DATABASE = ROOT / "data" / "questoes.db"
-CHECKPOINT = ROOT / "reports" / "reimportacao_samples_checkpoint.json"
+DATABASE = DB_PATH
 CATALOGO = carregar_catalogo(ROOT / "config" / "gabaritos.json")
 
 # Evidências explícitas encontradas na capa/organização do próprio sample.
@@ -65,7 +52,9 @@ def _gabarito_do_sample(caminho: Path, questoes: list[dict]) -> dict[int, str]:
     if not registro:
         return {}
     codigo = registro.get("codigo") or registro.get("prova")
-    numeros = {int(q.get("numero", indice)) for indice, q in enumerate(questoes, 1)}
+    numeros = {numero for q in questoes
+               for numero, motivo in [numero_oficial_explicitamente_extraido(q)]
+               if numero is not None}
     gabaritos = extrair_gabaritos_pdf(
         str(SAMPLES / registro["gabarito"]), codigo, registro.get("cargo") or None,
         numeros_esperados=numeros,
@@ -92,7 +81,11 @@ def _is_question_pdf(path: Path) -> bool:
 
 def _dados_questao(questao: dict) -> dict:
     return {
+        # Número lido no marcador do PDF é uma proposta para o campo oficial;
+        # a comparação continua pendente de conferência humana.
+        "numero_oficial": questao.get("numero"),
         "enunciado": questao["enunciado"],
+        "texto_apoio": questao.get("texto_apoio") or None,
         "tipo": questao["tipo"],
         "alternativas": questao.get("alternativas") or [],
         "disciplina": questao.get("disciplina") or "",
@@ -105,37 +98,106 @@ def _dados_questao(questao: dict) -> dict:
     }
 
 
-def _limpar_banco():
-    # A ordem respeita as foreign keys do SQLite.
-    ProvaCadastradaQuestao.delete().execute()
-    for modelo in (ProgressoTentativa, Resposta, Tentativa, RevisaoEspacada, ProvaQuestao, Prova, Alternativa, Questao):
-        modelo.delete().execute()
+def _comparar_com_acervo(db_path: Path, resultados: list[dict], dados_importacao: list[list[dict]]) -> dict:
+    """Compara por arquivo e ordem, sem tratar a ordem como número oficial."""
+    if not db_path.is_file():
+        return {"status": "banco_ausente", "por_arquivo": []}
+    uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as connection:
+        connection.row_factory = sqlite3.Row
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        required = {"provas_cadastradas", "prova_cadastrada_questoes", "questoes", "alternativas"}
+        if not required.issubset(tables):
+            return {"status": "schema_incompativel", "por_arquivo": []}
+        questao_columns = {row[1] for row in connection.execute('PRAGMA table_info("questoes")')}
+        names = [field for field in ("numero_oficial", "enunciado", "texto_apoio", "tipo", "disciplina", "banca", "ano", "cargo", "orgao", "dificuldade", "gabarito", "comentario", "imagem_path") if field in questao_columns]
+        query = (
+            "SELECT pc.id AS prova_id, pc.arquivo_questoes, pq.ordem, q.id AS questao_id, "
+            + ", ".join(f'q."{name}" AS "{name}"' for name in names)
+            + " FROM provas_cadastradas pc JOIN prova_cadastrada_questoes pq ON pq.prova_cadastrada_id = pc.id "
+            + "JOIN questoes q ON q.id = pq.questao_id ORDER BY pc.id, pq.ordem"
+        )
+        links = connection.execute(query).fetchall()
+        grouped = {}
+        for row in links:
+            key = str(row["arquivo_questoes"] or "").replace("\\", "/").casefold()
+            grouped.setdefault(key, {}).setdefault(row["prova_id"], []).append(dict(row))
+        alternatives = {}
+        for row in connection.execute("SELECT questao_id, letra, texto FROM alternativas ORDER BY questao_id, letra"):
+            alternatives.setdefault(row[0], []).append({"letra": row[1], "texto": row[2]})
+        attempt_counts = {}
+        if "provas" in tables and "prova_questoes" in tables and "tentativas" in tables:
+            for row in connection.execute(
+                "SELECT pc.arquivo_questoes, COUNT(DISTINCT t.id) "
+                "FROM provas_cadastradas pc JOIN prova_cadastrada_questoes pcq ON pcq.prova_cadastrada_id=pc.id "
+                "JOIN prova_questoes pq ON pq.questao_id=pcq.questao_id JOIN tentativas t ON t.prova_id=pq.prova_id "
+                "GROUP BY pc.arquivo_questoes"
+            ):
+                attempt_counts[str(row[0] or "").replace("\\", "/").casefold()] = row[1]
+
+    report = []
+    for result, incoming in zip(resultados, dados_importacao):
+        key = result["arquivo"].replace("\\", "/").casefold()
+        matches = grouped.get(key, {})
+        file_result = {"arquivo": result["arquivo"], "sha256_fonte": result.get("sha256_caderno"),
+                       "fonte_path": str(ROOT / result["arquivo"]),
+                       "provas_cadastradas_correspondentes": list(matches),
+                       "tentativas_relacionadas": attempt_counts.get(key, 0), "itens": []}
+        if len(matches) != 1:
+            file_result["status"] = "sem_correspondencia" if not matches else "correspondencia_ambigua"
+            file_result["itens"] = [{"ordem_candidata": index, "numero_oficial_extraido": item.get("numero_oficial"), "status": "revisao_manual_necessaria", "proposta": item}
+                                    for index, item in enumerate(incoming, 1)]
+            report.append(file_result)
+            continue
+        proof_id, old_links = next(iter(matches.items()))
+        by_order = {int(row["ordem"]): row for row in old_links}
+        file_result["status"] = "comparacao_por_ordem; numero_oficial_nao_inferido_da_ordem"
+        for index, item in enumerate(incoming, 1):
+            old = by_order.get(index)
+            proposal = dict(item)
+            if old is None:
+                file_result["itens"].append({"ordem_candidata": index, "numero_oficial_extraido": item.get("numero"), "status": "questao_nova_proposta", "proposta": proposal})
+                continue
+            current = {name: old.get(name) for name in proposal if name in old.keys()}
+            current["alternativas"] = alternatives.get(old["questao_id"], [])
+            fields = set(current) | set(proposal)
+            normalize = lambda value: None if value == "" else value
+            changes = {field: {"atual": current.get(field), "proposto": proposal.get(field)} for field in sorted(fields) if normalize(current.get(field)) != normalize(proposal.get(field))}
+            file_result["itens"].append({
+                "questao_id": old["questao_id"], "ordem_candidata": index,
+                "numero_oficial_atual": old.get("numero_oficial"),
+                "numero_oficial_extraido": item.get("numero"),
+                "status": "sem_diferenca_estrutural_detectada" if not changes else "proposta_pendente_de_conferencia",
+                "conteudo_atual": current,
+                "proposta": proposal,
+                "diferencas": changes,
+            })
+        report.append(file_result)
+    return {"status": "simulacao_somente_leitura", "por_arquivo": report}
 
 
-def _salvar_checkpoint(resultados: list[dict], dados_importacao: list[list[dict]]) -> None:
-    CHECKPOINT.parent.mkdir(exist_ok=True)
-    temporario = CHECKPOINT.with_suffix(".tmp")
+def _salvar_checkpoint(resultados: list[dict], dados_importacao: list[list[dict]], checkpoint: Path) -> None:
+    checkpoint.parent.mkdir(exist_ok=True)
+    temporario = checkpoint.with_suffix(".tmp")
     temporario.write_text(
         json.dumps({"por_arquivo": resultados, "dados_importacao": dados_importacao}, ensure_ascii=False),
         encoding="utf-8",
     )
-    temporario.replace(CHECKPOINT)
+    temporario.replace(checkpoint)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Reimportação com backup e conferência de cobertura")
-    parser.add_argument("--min-cobertura", type=float, default=0, help="Exige cobertura acima deste percentual antes de alterar o banco")
-    parser.add_argument("--retomar-checkpoint", action="store_true", help="Reutiliza extrações salvas após uma falha na gravação")
+    parser = argparse.ArgumentParser(description="Propõe diferenças de reimportação sem gravar no banco nem sobrescrever imagens")
+    parser.add_argument("--min-cobertura", type=float, default=0, help="Exige cobertura acima deste percentual para produzir a proposta")
+    parser.add_argument("--stage", action="store_true", help="Persiste propostas pendentes em staging local, sem aplicar ao acervo")
     args = parser.parse_args()
     pdfs = sorted(path for path in SAMPLES.rglob("*.pdf") if _is_question_pdf(path))
     if not pdfs:
         raise RuntimeError("Nenhum PDF encontrado; o banco foi preservado.")
     resultados = []
     dados_importacao = []
-    if args.retomar_checkpoint and CHECKPOINT.exists():
-        checkpoint = json.loads(CHECKPOINT.read_text(encoding="utf-8"))
-        resultados = checkpoint["por_arquivo"]
-        dados_importacao = checkpoint["dados_importacao"]
+    preview_root = REPORTS_DIR / f"reimportacao-preview-{datetime.now():%Y%m%d-%H%M%S-%f}"
+    checkpoint_path = preview_root / "checkpoint.json"
     processados = {resultado["arquivo"] for resultado in resultados}
     diagnosticos_gabarito = {}
 
@@ -145,7 +207,9 @@ def main() -> None:
             continue
         texto = extrair_texto(str(caminho))
         questoes = parsear_questoes(texto, str(caminho))
-        imagens = anexar_imagens_referenciadas(caminho, questoes, ROOT)
+        # Recortes de teste vão para uma pasta temporária local, nunca para os
+        # arquivos que o banco atual já pode referenciar.
+        imagens = anexar_imagens_referenciadas(caminho, questoes, preview_root)
         banca_confirmada = BANCAS_CONFIRMADAS.get(str(caminho.relative_to(SAMPLES)).replace("\\", "/"))
         if banca_confirmada:
             for questao in questoes:
@@ -218,58 +282,54 @@ def main() -> None:
         resultados[-1]["sha256_caderno"] = hashlib.sha256(caminho.read_bytes()).hexdigest()
         resultados[-1]["associacao"] = registro_gabarito
         resultados[-1]["itens"] = [{"numero": q["numero"], "gabarito": q.get("gabarito")} for q in questoes]
-        _salvar_checkpoint(resultados, dados_importacao)
+        _salvar_checkpoint(resultados, dados_importacao, checkpoint_path)
         print(f"Extraído: {caminho.name}: {len(questoes)} questões, {gabaritos_aplicados} vínculos", file=sys.stderr, flush=True)
 
     if not any(dados_importacao):
         raise RuntimeError("Nenhuma questão extraída; o banco foi preservado.")
     cobertura_prevista = 100 * sum(r["gabaritos"] for r in resultados) / sum(len(d) for d in dados_importacao)
     if cobertura_prevista <= args.min_cobertura:
-        raise RuntimeError(f"Cobertura {cobertura_prevista:.2f}% não supera {args.min_cobertura:.2f}%; banco preservado.")
-    backup = None
-    if DATABASE.exists():
-        backup = DATABASE.with_name(f"questoes.pre-reimport-{datetime.now():%Y%m%d-%H%M%S-%f}.db")
-        with sqlite3.connect(DATABASE.resolve().as_uri() + "?mode=ro", uri=True) as origem, sqlite3.connect(backup) as destino:
-            origem.backup(destino)
-            if destino.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-                raise RuntimeError("Backup não passou na verificação; banco preservado.")
-    init_db()
-    from src.models.questoes_repo import _criar_questao_sem_transacao
-
-    with db.atomic():
-        _limpar_banco()
-        total = 0
-        provas_por_arquivo = {
-            str(prova.arquivo_questoes or "").replace("\\", "/").casefold(): prova.id
-            for prova in ProvaCadastrada.select(ProvaCadastrada.id, ProvaCadastrada.arquivo_questoes)
-            if prova.arquivo_questoes
-        }
-        for dados_arquivo, resultado in zip(dados_importacao, resultados):
-            arquivo_normalizado = resultado["arquivo"].replace("\\", "/").casefold()
-            prova_cadastrada_id = provas_por_arquivo.get(arquivo_normalizado)
-            for ordem, (dados, item) in enumerate(zip(dados_arquivo, resultado["itens"]), start=1):
-                item["id"] = _criar_questao_sem_transacao(dados)
-                if prova_cadastrada_id is not None:
-                    ProvaCadastradaQuestao.create(
-                        prova_cadastrada=prova_cadastrada_id,
-                        questao=item["id"],
-                        ordem=ordem,
-                    )
-                total += 1
-
+        raise RuntimeError(f"Cobertura {cobertura_prevista:.2f}% não supera {args.min_cobertura:.2f}%; nenhum dado foi alterado.")
+    comparacao = _comparar_com_acervo(DATABASE, resultados, dados_importacao)
+    staging = None
+    if args.stage:
+        propostas = []
+        por_arquivo = comparacao.get("por_arquivo", [])
+        for arquivo_resultado in por_arquivo:
+            origem = next((item for item in resultados if item["arquivo"] == arquivo_resultado["arquivo"]), {})
+            for item in arquivo_resultado.get("itens", []):
+                propostas.append({
+                    "arquivo": arquivo_resultado["arquivo"],
+                    "sha256_fonte": origem.get("sha256_caderno"),
+                    "fonte_path": str(ROOT / arquivo_resultado["arquivo"]),
+                    "prova_id": next(iter(arquivo_resultado.get("provas_cadastradas_correspondentes", [])), None),
+                    "questao_id": item.get("questao_id"),
+                    "ordem_candidata": item.get("ordem_candidata"),
+                    "status": item.get("status"),
+                    "conteudo_atual": item.get("conteudo_atual"),
+                    "proposta": item.get("proposta"),
+                    "diferencas": item.get("diferencas", {}),
+                    "identidade_certificada": False,
+                    "revisao_humana": "pendente",
+                })
+        staging_path = REPORTS_DIR / "reimportacao_staging_v2.sqlite3"
+        staging = stage_proposals(staging_path, propostas)
     resumo = {
+        "modo": "simulacao_somente_leitura",
         "arquivos": len(pdfs),
-        "questoes_importadas": total,
-        "gabaritos_persistidos": Questao.select().where(Questao.gabarito.is_null(False), Questao.gabarito != "").count(),
-        "backup": str(backup) if backup else None,
+        "questoes_propostas": sum(len(data) for data in dados_importacao),
+        "cobertura_extraida_percentual_nao_equivale_a_precisao": cobertura_prevista,
+        "comparacao": comparacao,
+        "staging": staging,
         "por_arquivo": resultados,
+        "decisao": "Nenhuma alteração aplicada. Diferencas, novas questões, ordem candidata e impacto em tentativas exigem revisão antes de qualquer aplicação.",
     }
-    resumo["cobertura_percentual"] = 100 * resumo["gabaritos_persistidos"] / total
-    out = ROOT / "reports" / "reimportacao_samples.json"
+    out = REPORTS_DIR / f"proposta_reimportacao_samples_{datetime.now():%Y%m%d-%H%M%S-%f}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(resumo, ensure_ascii=False, indent=2), encoding="utf-8")
-    CHECKPOINT.unlink(missing_ok=True)
-    print(json.dumps(resumo, ensure_ascii=False, indent=2))
+    checkpoint_path.unlink(missing_ok=True)
+    print(f"Proposta somente leitura gravada em {out.relative_to(ROOT)}")
+    print(f"{resumo['arquivos']} arquivos, {resumo['questoes_propostas']} questões; banco não foi alterado.")
 
 
 if __name__ == "__main__":

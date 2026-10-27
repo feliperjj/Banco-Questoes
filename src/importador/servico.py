@@ -1,6 +1,7 @@
 """Fluxo híbrido de importação, sem acesso ao banco de dados."""
 from collections import Counter
 from pathlib import Path
+from src.config import ROOT_DIR, TEST_MODE, TEST_ROOT
 from .extrator import extrair_texto
 from .parser import parsear_questoes, quantidade_declarada
 from .validacao import problemas_estrutura
@@ -20,7 +21,7 @@ def importar_caderno(caminho):
     imagens_extraidas = 0
     if Path(caminho).suffix.lower() == ".pdf":
         from .imagens import anexar_imagens_referenciadas
-        raiz = Path(__file__).resolve().parents[2]
+        raiz = TEST_ROOT if TEST_MODE else ROOT_DIR
         imagens_extraidas = anexar_imagens_referenciadas(caminho, qs, raiz)
     contagem = Counter(q['numero'] for q in qs)
     duplicados = sorted(n for n,c in contagem.items() if c>1)

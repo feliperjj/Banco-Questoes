@@ -59,22 +59,24 @@ def _extrair_duas_linhas(linhas: list[str], codigo_prova: str, cargo_normalizado
             continue
         validos = set('ABCDEXVF') | {'CERTO', 'ERRADO', 'VERDADEIRO', 'FALSO', 'ANULADA', 'ANULADO', '0', '?', '*'}
         respostas_linha = None
-        for proxima_linha in range(indice + 1, min(indice + 5, len(linhas))):
+        proxima_linha = indice + 1
+        candidata = linhas[proxima_linha].strip()
+        # A próxima sequência numérica inicia outro bloco: não atravesse-o.
+        if re.fullmatch(r"(?i)(?:(?:Item|Questões|Questoes)\s+)?\d{1,3}(?:\s+\d{1,3})*", candidata):
+            continue
+        rotulo_embutido = bool(re.match(r"(?i)^(?:Gabarito|Respostas?)\s*:?\s+", candidata))
+        if re.fullmatch(r"(?i)(?:Gabarito|Respostas?)\s*:?\s*", candidata):
+            proxima_linha += 1
+            if proxima_linha >= len(linhas):
+                continue
             candidata = linhas[proxima_linha].strip()
-            # A próxima sequência numérica inicia outro bloco: não atravesse-o.
-            if re.fullmatch(r"(?i)(?:(?:Item|Questões|Questoes)\s+)?\d{1,3}(?:\s+\d{1,3})*", candidata):
-                break
-            candidata = re.sub(r'(?i)^(?:Gabarito|Respostas?)\s*:?\s*', '', candidata)
-            tokens = candidata.upper().split()
-            # Alguns gabaritos intercalam nomes de disciplina entre os números
-            # e as respostas, ou imprimem o nome e as respostas na mesma linha.
-            for inicio_respostas in range(max(0, len(tokens) - len(numeros)), len(tokens)):
-                sufixo = tokens[inicio_respostas:]
-                if len(sufixo) == len(numeros) and all(token in validos for token in sufixo):
-                    respostas_linha = sufixo
-                    break
-            if respostas_linha is not None:
-                break
+        elif rotulo_embutido:
+            candidata = re.sub(r"(?i)^(?:Gabarito|Respostas?)\s*:?\s+", "", candidata)
+        # Sem rótulo de resposta, aceite apenas a sequência inteira e adjacente.
+        # Pular texto ou linhas ambíguas pode vincular opções do caderno como gabarito.
+        tokens = candidata.upper().split()
+        if len(tokens) == len(numeros) and all(token in validos for token in tokens):
+            respostas_linha = tokens
         if respostas_linha is None:
             continue
         if len(respostas_linha) != len(numeros):
@@ -144,14 +146,13 @@ class ExtratorMultiprova(ExtratorBanca):
         if not encontrado or not 1 <= int(encontrado.group(1)) <= 4:
             logger.warning("Grade multiprova exige seleção explícita de prova 1 a 4")
             return {}
-        # Alguns PDFs quebram o título das colunas em várias linhas e o texto
-        # extraído pode listar a última coluna antes das três primeiras.
-        # Reunir os rótulos da página e ordenar pelo número recupera a ordem
-        # física das colunas usada pelas linhas número/resposta.
-        cabecalho = sorted(
-            {int(n) for linha in linhas for n in re.findall(r'(?i)\bPROVA\s*([1-4])\b', linha)}
-        )
-        if len(set(cabecalho)) != len(cabecalho) or int(encontrado.group(1)) not in cabecalho:
+        # Preservar a ordem física dos cabeçalhos. Ordenar por número pode
+        # selecionar silenciosamente a coluna errada quando a extração textual
+        # apresenta, por exemplo, "PROVA 2 PROVA 1".
+        cabecalho = list(dict.fromkeys(
+            int(n) for linha in linhas for n in re.findall(r'(?i)\bPROVA\s*([1-4])\b', linha)
+        ))
+        if int(encontrado.group(1)) not in cabecalho:
             return MapaGabarito()
         coluna = cabecalho.index(int(encontrado.group(1)))
         resultado = MapaGabarito()

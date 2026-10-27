@@ -58,7 +58,10 @@ def _associar_textos_linguas(texto: str, questoes: list[dict]) -> None:
     passagem sob o título da disciplina e, em seguida, dizem para julgar os
     itens seguintes. O próximo título de disciplina encerra esse grupo.
     """
-    numeros = {int(q.get("numero", 0)) for q in questoes}
+    numeros = {
+        int(q["numero"]) for q in questoes
+        if isinstance(q.get("numero"), int) and not isinstance(q.get("numero"), bool)
+    }
     secoes = (
         ("língua inglesa", r"(?im)^\s*L[ÍI]NGUA\s+INGLESA\s*$", r"(?im)^\s*L[ÍI]NGUA\s+ESPANHOLA\s*$"),
         ("língua espanhola", r"(?im)^\s*L[ÍI]NGUA\s+ESPANHOLA\s*$", r"(?im)^\s*DIREITO\s+P[ÚU]BLICO\s*$"),
@@ -89,7 +92,7 @@ def _associar_textos_linguas(texto: str, questoes: list[dict]) -> None:
             continue
         faixa = {int(m.group(1)) for m in marcadores}
         for questao in questoes:
-            if int(questao.get("numero", 0)) in faixa:
+            if questao.get("numero") in faixa:
                 questao["texto_apoio"] = suporte
 
 
@@ -351,7 +354,9 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
     for numero_questao, bloco in enumerate(candidatos, 1):
         bloco = bloco.strip()
         marcador = _MARCADOR_QUESTAO.match(bloco)
-        numero_real = int(marcador.group(1)) if marcador else numero_questao
+        # A ordem de apresentação localiza o bloco, mas não certifica o número
+        # oficial. Itens sem marcador permanecem sem numeração.
+        numero_real = int(marcador.group(1)) if marcador else None
         if marcador:
             bloco = bloco[marcador.end():].strip()
         bloco = re.split(r"(?m)^[ \t]*JUSTIFICATIVA(?:[ \t]*[-–:]|[ \t]*$)", bloco, maxsplit=1, flags=re.IGNORECASE)[0].strip()
@@ -379,6 +384,12 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
         else:
             texto_apoio_marcado = ""
             enunciado = _juntar_linhas(bloco_conteudo)
+        enunciado = re.sub(
+            r"\s+Conhecimentos\s+(?:Gerais|Básicos|Complementares|Específicos)(?:\s+[IVX]+)?\s*$",
+            "",
+            enunciado,
+            flags=re.IGNORECASE,
+        ).strip()
         texto_apoio = texto_apoio_marcado or contextos.get(numero_real, "")
         apoio_inicial_inferido = False
         alternativas = []
@@ -411,7 +422,8 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
                 texto_apoio = apoio
         if not texto_apoio and texto_apoio_inicial:
             dentro_intervalo = bool(
-                intervalo_apoio and intervalo_apoio[0] <= numero_real <= intervalo_apoio[1]
+                numero_real is not None and intervalo_apoio
+                and intervalo_apoio[0] <= numero_real <= intervalo_apoio[1]
             )
             mesma_disciplina = bool(
                 disciplina_apoio
@@ -436,6 +448,7 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
             # Preserva o número original para que gabaritos parciais possam
             # ser associados sem deslocar respostas após uma questão perdida.
             "numero": numero_real,
+            "ordem_visual": numero_questao,
             "perfil_importacao": resultado.perfil,
             "aviso_importacao": " ".join(dict.fromkeys(avisos)),
             "perfil_extracao": perfil_extracao,

@@ -68,24 +68,90 @@ def gabarito_valido(valor: str | None) -> bool:
     return token in GABARITOS_VALIDOS
 
 
+def numero_oficial_explicitamente_extraido(questao: dict) -> tuple[int | None, str | None]:
+    """Retorna apenas número explícito; ordem visual e ID nunca são substitutos."""
+    if questao.get("numero_ambiguo") or questao.get("numeracao_ambigua"):
+        return None, "numeracao_ambigua"
+    value = questao.get("numero")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None, "numeracao_ausente"
+    if isinstance(value, bool):
+        return None, "numeracao_invalida"
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None, "numeracao_invalida"
+    if number <= 0 or (isinstance(value, float) and value != number):
+        return None, "numeracao_invalida"
+    if isinstance(value, str) and str(number) != value.strip():
+        return None, "numeracao_invalida"
+    return number, None
+
+
+def _canonical_scope(value) -> tuple:
+    if isinstance(value, dict):
+        return tuple(sorted((str(key), str(item)) for key, item in value.items() if item not in (None, "")))
+    if isinstance(value, tuple):
+        return value
+    if value in (None, ""):
+        return ()
+    return (("escopo", str(value)),)
+
+
+def _escopo_questao(questao: dict) -> tuple:
+    declared = questao.get("escopo")
+    if declared not in (None, ""):
+        return _canonical_scope(declared)
+    return tuple((key, str(questao[key])) for key in ("prova", "cargo", "codigo", "versao", "ano")
+                 if questao.get(key) not in (None, ""))
+
+
 def associar_gabaritos(questoes: list[dict], gabaritos: dict[int, str], *, confianca: str = "alta") -> dict:
-    """Associa por número oficial; nunca usa a posição visual como chave."""
+    """Associa por número oficial e escopo explícitos, sem deslocamento posicional."""
     por_numero = defaultdict(list)
-    for indice, questao in enumerate(questoes, 1):
-        try:
-            numero = int(questao.get("numero", indice))
-        except (TypeError, ValueError):
+    problemas_numeracao = []
+    for visual_order, questao in enumerate(questoes, 1):
+        numero, motivo = numero_oficial_explicitamente_extraido(questao)
+        if motivo:
+            problemas_numeracao.append({"motivo": motivo, "ordem_visual": visual_order,
+                                        "id": questao.get("id")})
             continue
-        por_numero[numero].append(questao)
-    duplicados = sorted(numero for numero, itens in por_numero.items() if len(itens) > 1)
-    extras = sorted(set(int(n) for n in gabaritos) - set(por_numero))
-    faltantes = sorted(set(por_numero) - set(int(n) for n in gabaritos))
+        por_numero[(_escopo_questao(questao), numero)].append(questao)
+    duplicados_por_escopo = sorted(key for key, itens in por_numero.items() if len(itens) > 1)
+    answers = {}
+    errors = []
+    for raw_key, resposta in gabaritos.items():
+        if isinstance(raw_key, tuple) and len(raw_key) == 2:
+            scope = _canonical_scope(raw_key[0])
+            raw_number = raw_key[1]
+        else:
+            scope = None
+            raw_number = raw_key
+        try:
+            number = int(raw_number)
+            if number <= 0 or (isinstance(raw_number, str) and str(number) != raw_number.strip()):
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            errors.append({"motivo": "numeracao_invalida", "valor": repr(raw_number)})
+            continue
+        answers[(scope, number)] = resposta
+    ambiguous = {number for scope, number in answers if scope is None
+                 and len([key for key in por_numero if key[1] == number]) > 1}
+    extras = sorted(number for (scope, number) in answers
+                    if number not in {key[1] for key in por_numero} and number not in ambiguous)
+    faltantes = sorted(number for (scope, number), items in por_numero.items()
+                       if (scope, number) not in answers and (None, number) not in answers)
     vinculados = 0
     conflitos = list(getattr(gabaritos, 'conflitos', ()))
     incompativeis = []
-    for numero, resposta in gabaritos.items():
-        numero = int(numero)
-        itens = por_numero.get(numero, [])
+    escopos_divergentes = []
+    for (answer_scope, numero), resposta in answers.items():
+        if answer_scope is None and numero in ambiguous:
+            escopos_divergentes.append(numero)
+            continue
+        matching_keys = [key for key in por_numero if key[1] == numero
+                         and (answer_scope is None or key[0] == answer_scope)]
+        itens = por_numero.get(matching_keys[0], []) if len(matching_keys) == 1 else []
         if len(itens) != 1:
             continue
         questao = itens[0]
@@ -108,9 +174,13 @@ def associar_gabaritos(questoes: list[dict], gabaritos: dict[int, str], *, confi
         vinculados += 1
     faltantes = sorted(set(faltantes) | set(incompativeis))
     return {"extraidos": len(gabaritos), "vinculados": vinculados, "faltantes": faltantes,
-            "extras": extras, "duplicados": duplicados, "conflitos": sorted(conflitos),
+            "extras": extras, "duplicados": sorted(number for scope, number in duplicados_por_escopo),
+            "duplicados_por_escopo": duplicados_por_escopo, "conflitos": sorted(conflitos),
             "incompativeis": sorted(incompativeis),
-            "revisao_manual": bool(faltantes or extras or duplicados or conflitos)}
+            "numeracao": problemas_numeracao, "erros_gabarito": errors,
+            "escopo_divergente": sorted(set(escopos_divergentes)),
+            "revisao_manual": bool(faltantes or extras or duplicados_por_escopo or conflitos
+                                    or problemas_numeracao or errors or escopos_divergentes)}
 
 
 def validar_gabarito(
@@ -140,6 +210,12 @@ def validar_gabarito(
         motivos.append('gabaritos_incompativeis')
     if associacao['conflitos']:
         motivos.append('gabaritos_conflitantes')
+    if associacao['numeracao']:
+        motivos.extend(sorted({item["motivo"] for item in associacao['numeracao']}))
+    if associacao['escopo_divergente']:
+        motivos.append('escopo_divergente')
+    if associacao['erros_gabarito']:
+        motivos.append('numeracao_invalida')
     return {
         "valido": not motivos,
         "questoes": len(questoes),
@@ -149,6 +225,10 @@ def validar_gabarito(
         "duplicados": duplicados,
         "incompativeis": associacao['incompativeis'],
         "conflitos": associacao['conflitos'],
+        "numeracao": associacao['numeracao'],
+        "escopo_divergente": associacao['escopo_divergente'],
+        "erros_gabarito": associacao['erros_gabarito'],
+        "associados": associacao["vinculados"],
         "motivos": motivos,
         "revisao_manual": bool(motivos),
     }

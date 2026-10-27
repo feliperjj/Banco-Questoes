@@ -18,6 +18,12 @@ from src.models.questoes_repo import (
 )
 
 
+def _aprovar_fixture(questao_id, tmp_path, answer):
+    from helpers import approve_with_evidence
+    fonte = tmp_path / f"fonte-{questao_id}.pdf"
+    approve_with_evidence(questao_id, fonte, answer)
+
+
 def test_criar_questoes_em_lote_persiste_questoes_e_alternativas(tmp_path):
     init_db(str(tmp_path / "questoes.db"))
 
@@ -64,6 +70,8 @@ def test_finalizar_tentativa_calcula_nota_sobre_todas_as_questoes(tmp_path):
     init_db(str(tmp_path / "questoes.db"))
     primeira = criar_questao({"enunciado": "Primeira questão", "tipo": "certo_errado", "gabarito": "Certo"})
     segunda = criar_questao({"enunciado": "Segunda questão", "tipo": "certo_errado", "gabarito": "Errado"})
+    _aprovar_fixture(primeira, tmp_path, "Certo")
+    _aprovar_fixture(segunda, tmp_path, "Errado")
     prova_id = criar_prova("Prova parcial", {}, 2, None)
 
     # A seleção aleatória da prova pode escolher as duas questões disponíveis;
@@ -92,7 +100,8 @@ def test_atualizar_questao_remove_alternativas_ao_trocar_para_certo_errado(tmp_p
 
 def test_criar_prova_persiste_tempo_limite_e_rejeita_quantidade_invalida(tmp_path):
     init_db(str(tmp_path / "questoes.db"))
-    criar_questao({"enunciado": "Questão para limite de tempo", "tipo": "certo_errado", "gabarito": "Certo"})
+    questao = criar_questao({"enunciado": "Questão para limite de tempo", "tipo": "certo_errado", "gabarito": "Certo"})
+    _aprovar_fixture(questao, tmp_path, "Certo")
 
     assert criar_prova("Inválida", {}, 0, 1) == 0
     prova_id = criar_prova("Com limite", {}, 1, 2)
@@ -103,11 +112,15 @@ def test_criar_prova_persiste_tempo_limite_e_rejeita_quantidade_invalida(tmp_pat
 
 def test_prova_cadastrada_preserva_ordem_e_pode_gerar_prova(tmp_path):
     init_db(str(tmp_path / "provas-cadastradas.db"))
+    primeira = criar_questao({"enunciado": "Questão dois", "tipo": "certo_errado", "gabarito": "Errado"})
+    segunda = criar_questao({"enunciado": "Questão um", "tipo": "certo_errado", "gabarito": "Certo"})
+    _aprovar_fixture(primeira, tmp_path, "Errado")
+    _aprovar_fixture(segunda, tmp_path, "Certo")
     fonte_id = criar_prova_cadastrada(
         "Concurso de exemplo",
         [
-            {"enunciado": "Questão dois", "tipo": "certo_errado", "gabarito": "Errado"},
-            {"enunciado": "Questão um", "tipo": "certo_errado", "gabarito": "Certo"},
+            {"_questao_id": primeira},
+            {"_questao_id": segunda},
         ],
         arquivo_questoes="prova.pdf",
         arquivo_gabarito="gabarito.pdf",
@@ -141,15 +154,14 @@ def test_prova_cadastrada_preserva_ordem_e_pode_gerar_prova(tmp_path):
 
 def test_questoes_importadas_tambem_entram_no_banco_aleatorio_com_filtro_de_banca(tmp_path):
     init_db(str(tmp_path / "banco-e-prova.db"))
+    questao = criar_questao({
+        "enunciado": "Questão da FGV", "tipo": "certo_errado", "banca": "FGV", "gabarito": "Certo",
+    })
+    _aprovar_fixture(questao, tmp_path, "Certo")
     fonte_id = criar_prova_cadastrada(
         "FGV — Agente Administrativo",
         [
-            {
-                "enunciado": "Questão da FGV",
-                "tipo": "certo_errado",
-                "banca": "FGV",
-                "gabarito": "Certo",
-            }
+            {"_questao_id": questao}
         ],
         arquivo_questoes="fgv-agente.pdf",
         arquivo_gabarito="fgv-agente-gabarito.pdf",
@@ -175,7 +187,7 @@ def test_prova_cadastrada_incompleta_nao_pode_ser_usada(tmp_path):
 
     cadastrada = listar_provas_cadastradas()[0]
     assert cadastrada["pronta"] is False
-    with pytest.raises(ValueError, match="sem gabarito avaliável"):
+    with pytest.raises(ValueError, match="sem versão conferida"):
         criar_prova("Tentativa inválida", {}, 10, None, prova_cadastrada_id=fonte_id)
 
 
@@ -197,6 +209,8 @@ def test_fontes_incluem_prova_existente_e_permitam_reutiliza_la(tmp_path):
     init_db(str(tmp_path / "fontes.db"))
     primeira = criar_questao({"enunciado": "Primeira", "tipo": "certo_errado", "gabarito": "Certo"})
     segunda = criar_questao({"enunciado": "Segunda", "tipo": "certo_errado", "gabarito": "Errado"})
+    _aprovar_fixture(primeira, tmp_path, "Certo")
+    _aprovar_fixture(segunda, tmp_path, "Errado")
     prova_existente = criar_prova("Prova já cadastrada", {}, 2, None)
 
     fonte = next(item for item in listar_fontes_de_prova() if item["origem_id"] == prova_existente and item["origem_tipo"] == "existente")
@@ -227,6 +241,7 @@ def test_fontes_incluem_prova_existente_e_permitam_reutiliza_la(tmp_path):
 def test_finalizar_tentativa_rejeita_repeticao_e_questao_fora_da_prova(tmp_path):
     init_db(str(tmp_path / "questoes.db"))
     dentro = criar_questao({"enunciado": "Questão dentro da prova", "tipo": "certo_errado", "gabarito": "Certo"})
+    _aprovar_fixture(dentro, tmp_path, "Certo")
     prova_id = criar_prova("Integridade", {}, 1, None)
     fora = criar_questao({"enunciado": "Questão fora da prova", "tipo": "certo_errado", "gabarito": "Certo"})
     tentativa_id = iniciar_tentativa(prova_id)
