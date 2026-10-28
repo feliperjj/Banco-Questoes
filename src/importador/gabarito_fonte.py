@@ -96,9 +96,10 @@ def _canonical_answer(answer: str, expected: str | None) -> str:
     return answer
 
 
-def _header_columns(lines: list[list[dict[str, Any]]]) -> list[int]:
+def _header_columns(lines: list[list[dict[str, Any]]]) -> list[tuple[int, int]]:
     """Return x-centres in the order of an explicit PROVA/TIPO header."""
-    centres: list[int] = []
+    from .perfis.documentos import normalizar_versao
+    centres: list[tuple[int, int]] = []
     # Some sheets put PROVA 4 on a separate line above PROVA 1..3.  Inspect
     # the complete header area, stopping only once the first dense answer row
     # begins, rather than assuming headers are among the first eight lines.
@@ -107,23 +108,26 @@ def _header_columns(lines: list[list[dict[str, Any]]]) -> list[int]:
         found = [(i, w) for i, (t, w) in enumerate(toks) if t in {"PROVA", "TIPO", "T1", "T2", "T3", "T4"}]
         for i, word in found:
             if _token(word) in {"PROVA", "TIPO"} and i + 1 < len(line):
-                nxt = _token(line[i + 1])
+                nxt = normalizar_versao(_token(line[i + 1]))
                 if nxt.isdigit():
                     centre = round((float(word.get("x0", 0)) + float(line[i + 1].get("x1", 0))) / 2)
-                    if centre not in centres:
-                        centres.append(centre)
+                    entry = (int(nxt), centre)
+                    if entry not in centres:
+                        centres.append(entry)
             elif _token(word) in {"T1", "T2", "T3", "T4"}:
                 centre = round((float(word.get("x0", 0)) + float(word.get("x1", 0))) / 2)
-                if centre not in centres:
-                    centres.append(centre)
+                entry = (int(_token(word)[1:]), centre)
+                if entry not in centres:
+                    centres.append(entry)
         if not found and len([w for w in line if _token(w).isdigit()]) >= 4:
             break
-    return sorted(centres)
+    return sorted(centres, key=lambda entry: entry[1])
 
 
 def _wanted_column(codigo: str | None) -> int | None:
-    m = re.search(r"(?:PROVA|TIPO|T)\s*([1-9])\b", (codigo or "").upper())
-    return int(m.group(1)) - 1 if m else None
+    from .perfis.documentos import versao_da_selecao
+    value = versao_da_selecao(codigo) or (str(codigo) if str(codigo or "").isdigit() else "")
+    return int(value) - 1 if value.isdigit() and 1 <= int(value) <= 9 else None
 
 
 def _line_candidates(line, page, method: str, wanted_col: int | None, columns: list[int]):
@@ -206,7 +210,9 @@ def _horizontal_candidates(lines, page):
         selected = None
         for offset in range(1, min(4, len(lines) - index)):
             next_line = lines[index + offset]
-            if any(_token(w).isdigit() for w in next_line):
+            numeric_tokens = [_token(w) for w in next_line if _token(w).isdigit()]
+            padded_zero_row = bool(numeric_tokens) and all(token == "0" for token in numeric_tokens)
+            if numeric_tokens and not padded_zero_row:
                 if offset > 1:
                     break
                 continue
@@ -223,7 +229,7 @@ def _horizontal_candidates(lines, page):
     return out
 
 
-def extract_answer_evidence(path, *, codigo_prova=None, cargo=None, expected_answers=None):
+def extract_answer_evidence(path, *, codigo_prova=None, cargo=None, versao=None, expected_answers=None):
     """Extract physically bounded evidence for the requested answer map.
 
     ``expected_answers`` is mandatory in practice: it defines the question
@@ -232,7 +238,7 @@ def extract_answer_evidence(path, *, codigo_prova=None, cargo=None, expected_ans
     """
     expected = {int(k): str(v).upper() if v is not None else None for k, v in (expected_answers or {}).items()}
     result = {"answers": {}, "issues": []}
-    context = FiltroContexto(codigo_prova, cargo)
+    context = FiltroContexto(codigo_prova, cargo, versao)
     try:
         pdf = pdfplumber.open(path)
     except Exception as exc:
@@ -291,8 +297,15 @@ def extract_answer_evidence(path, *, codigo_prova=None, cargo=None, expected_ans
             if selected_texts != physical_texts:
                 selected_ids = {id(value) for value in selected_texts}
                 lines = [line for line, value in zip(lines, physical_texts) if id(value) in selected_ids]
-            wanted_col = _wanted_column(codigo_prova)
-            columns = _header_columns(lines)
+            wanted_col = _wanted_column("Tipo " + context.versao if context.versao else codigo_prova)
+            headers = _header_columns(lines)
+            columns = [centre for _, centre in headers]
+            if wanted_col is not None and headers:
+                matching = [index for index, (version, _) in enumerate(headers) if version == wanted_col + 1]
+                if len(matching) != 1:
+                    result["issues"].append(f"version_column_ambiguous_or_missing:{page_no}")
+                    continue
+                wanted_col = matching[0]
             candidates = []
             for line in lines:
                 candidates.extend(_line_candidates(line, page, "pair", wanted_col, columns))

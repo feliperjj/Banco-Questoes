@@ -142,10 +142,89 @@ def _sequencia_isolada(texto):
             for i,m in enumerate(selecionados)]
 
 
-def segmentar(texto_questoes: str, texto_original: str, banca: str = "") -> Segmentacao:
+def _contextualizar_itens(blocos, texto):
+    contextos = list(re.finditer(r"(?ims)^\s*TEXTO DE APOIO\s*\n(.*?)^\s*ITEM PARA JULGAMENTO\s*\n", texto))
+    result = []
+    cursor = 0
+    for bloco in blocos:
+        if re.search(r"(?im)^\s*TEXTO DE APOIO\s*$", bloco):
+            result.append(bloco)
+            continue
+        marcador = _MARCADOR_QUESTAO.match(bloco.strip())
+        if not marcador:
+            result.append(bloco)
+            continue
+        corpo = bloco.strip()[marcador.end():].strip()
+        position = texto.find(corpo[:60], cursor)
+        anteriores = [contexto for contexto in contextos if contexto.end() <= position]
+        if position >= 0:
+            cursor = position + min(len(corpo), 60)
+        if anteriores:
+            apoio = anteriores[-1].group(1).strip()
+            bloco = f"QUESTÃO {marcador.group(1)}\nTEXTO DE APOIO\n{apoio}\nITEM PARA JULGAMENTO\n{corpo}"
+        result.append(bloco)
+    return result
+
+
+def _segmentar_perfil(texto_questoes: str, texto_original: str, perfil_id: str) -> Segmentacao:
+    """Executa somente o perfil escolhido depois da etapa de reconhecimento."""
+    geral_perfil, geral, alternativas_gerais = _geral(texto_questoes)
+    if perfil_id == "certo_errado_contexto_v1":
+        if not re.search(r"(?im)^\s*ITEM PARA JULGAMENTO\s*$", texto_questoes) or not re.search(r"(?im)^\s*TEXTO DE APOIO\s*$", texto_questoes):
+            return Segmentacao(perfil_id, [], False, "O documento não contém os marcadores de contexto deste perfil.")
+        blocos, alternativas = _contextualizar_itens(geral, texto_questoes), False
+    elif perfil_id == "certo_errado_sequencial_v1":
+        blocos = _separar_itens_cespe(texto_questoes)
+        alternativas = False
+    elif perfil_id == "multipla_escolha_sequencia_isolada_v3":
+        blocos = _sequencia_isolada(texto_questoes)
+        alternativas = True
+    elif perfil_id == "multipla_escolha_numerada_v1":
+        if geral_perfil == perfil_id:
+            blocos, alternativas = geral, alternativas_gerais
+        else:
+            # A normalização do parser pode expor os mesmos marcadores como
+            # números pontuados. O perfil foi reconhecido no texto-fonte, então
+            # valide os blocos originais antes de declarar incompatibilidade.
+            blocos = _blocos_multipla_escolha(texto_original)
+            alternativas = bool(blocos)
+    elif perfil_id == "multipla_escolha_predominante_v2":
+        blocos = _blocos_multipla_escolha(texto_original)
+        alternativas = True
+    elif perfil_id == "questoes_nomeadas_v1":
+        blocos = _por_padrao(texto_questoes, PERFIS[0])
+        alternativas = bool(_INICIO_ALTERNATIVA.search(texto_questoes))
+    elif perfil_id == "generico_v1":
+        if geral_perfil != perfil_id:
+            return Segmentacao(perfil_id, [], alternativas_gerais,
+                               "O documento tem marcadores que exigem outro perfil.")
+        blocos, alternativas = geral, alternativas_gerais
+    else:
+        perfil = next((item for item in PERFIS if item.id == perfil_id), None)
+        if perfil is None:
+            return Segmentacao(perfil_id, [], False, "Perfil não registrado.")
+        blocos = _por_padrao(texto_questoes, perfil)
+        alternativas = bool(_INICIO_ALTERNATIVA.search(texto_questoes))
+
+    if not blocos:
+        return Segmentacao(perfil_id, [], alternativas, "O perfil selecionado não encontrou blocos verificáveis.")
+    score = _pontuar(blocos)
+    if perfil_id.startswith("certo_errado"):
+        conteudos_validos = sum(len(_juntar_linhas(partes_bloco(bloco)[0])) >= 10 for bloco in blocos)
+        if conteudos_validos != len(blocos):
+            return Segmentacao(perfil_id, [], alternativas, "Há itens sem enunciado suficiente para este perfil.")
+    elif score[0] < 1 or score[3] < 1:
+        return Segmentacao(perfil_id, [], alternativas, "A estrutura encontrada é insuficiente para este perfil.")
+    diagnostico = ({"perfil": perfil_id, "blocos": len(blocos), "pontuacao": list(score), "selecionado": True},)
+    return Segmentacao(perfil_id, blocos, alternativas, "", diagnostico)
+
+
+def segmentar(texto_questoes: str, texto_original: str, banca: str = "", *, perfil_escolhido: str | None = None) -> Segmentacao:
+    if perfil_escolhido:
+        return _segmentar_perfil(texto_questoes, texto_original, perfil_escolhido)
     perfil, geral, alternativas = _geral(texto_questoes)
-    if '\nITEM PARA JULGAMENTO\n' in texto_questoes and '\nTEXTO DE APOIO\n' in texto_questoes:
-        return Segmentacao('certo_errado_contexto_v1', geral, False)
+    if re.search(r"(?im)^\s*ITEM PARA JULGAMENTO\s*$", texto_questoes) and re.search(r"(?im)^\s*TEXTO DE APOIO\s*$", texto_questoes):
+        return Segmentacao('certo_errado_contexto_v1', _contextualizar_itens(geral, texto_questoes), False)
     if perfil == 'certo_errado_sequencial_v1':
         return Segmentacao(perfil, geral, False)
     # Os cabeçalhos nomeados têm precedência sobre números internos.

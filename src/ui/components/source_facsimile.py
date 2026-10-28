@@ -26,6 +26,7 @@ class SourceFacsimile(QScrollArea):
         while self.rows.count():
             item = self.rows.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
         self.images = []
         for asset in assets:

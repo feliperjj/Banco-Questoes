@@ -45,6 +45,9 @@ def extrair_recuado(pdf):
                     topo = max(topo, y + 13)
         # Marcadores numa segunda margem confirmam duas colunas. Números
         # internos nunca são primeiros tokens de uma linha recortada.
+        from .pdf_paginas import limpar_cabecalhos_julgamento
+        pagina, _ = limpar_cabecalhos_julgamento(pagina)
+        words = pagina.extract_words(x_tolerance=2, y_tolerance=3)
         direita = [w for w in words if re.fullmatch(r'\d{1,3}\.?', w['text'])
                    and pagina.width * .49 < w['x0'] < pagina.width * .56 and w['top'] > topo]
         cruzadas = sum(1 for w in words if w['x0'] < pagina.width/2 - 3 and w['x1'] > pagina.width/2 + 3 and w['top'] > topo)

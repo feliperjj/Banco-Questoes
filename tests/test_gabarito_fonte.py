@@ -59,6 +59,20 @@ def test_horizontal_grade_keeps_number_alignment(tmp_path):
     assert set(out["answers"]) == {1, 2, 3}
 
 
+def test_horizontal_grade_accepts_zero_padding_after_partial_rows(tmp_path):
+    path = tmp_path / "grade-padded.pdf"
+    path.write_bytes(b"pdf")
+    numbers = [str(value) for value in range(61, 71)] + ["0"] * 10
+    answers = ["E", "X", "C", "E", "C", "E", "C", "E", "E", "C"] + ["0"] * 10
+    rows = [(40 + index * 20, 20, value) for index, value in enumerate(numbers)]
+    rows += [(40 + index * 20, 40, value) for index, value in enumerate(["Gabarito", *answers])]
+    pdf = _Pdf([_Page(rows, "Item " + " ".join(numbers) + "\nGabarito " + " ".join(answers))])
+    with patch("src.importador.gabarito_fonte.pdfplumber.open", return_value=pdf):
+        out = extract_answer_evidence(path, expected_answers={value: None for value in range(61, 71)})
+    assert not out["issues"]
+    assert [out["answers"][value]["resposta"] for value in range(61, 71)] == answers[:10]
+
+
 def test_multiprova_selects_requested_occurrence_even_equal_answer(tmp_path):
     path = tmp_path / "multi.pdf"
     path.write_bytes(b"pdf")

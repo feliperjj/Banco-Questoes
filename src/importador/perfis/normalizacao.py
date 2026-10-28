@@ -3,6 +3,8 @@ import re
 
 
 def normalizar_formatos(texto):
+    texto = re.sub(r'(?im)^Legisla[çc][aã]o Acerca de Seguran[çc]a da\s+Informa[çc][aã]o e Prote[çc][aã]o de Dados[ \t]*$',
+                   lambda match: re.sub(r'\s+', ' ', match.group()), texto)
     texto = re.sub(r'(?i)(quest(?:ões|oes) de)[ \t]*\n[ \t]*(n[úu]meros\s+\d)', r'\1 \2', texto)
     # Frações verticais exportadas na ordem numerador / letra / denominador.
     # Só reconhecer uma série completa de alternativas, nunca um número solto.
@@ -16,7 +18,7 @@ def normalizar_formatos(texto):
             sequencias.extend(grupo)
     for m in reversed(sequencias):
         texto = texto[:m.start()] + f'({m.group(2)}) {m.group(1)}/{m.group(4)}{m.group(3)}' + texto[m.end():]
-    texto = re.sub(r"(?im)^([ \t]*[A-E][.)][ \t]*)(?:SQUARE|□|☐|☑)[ \t]*", r"\1", texto)
+    texto = re.sub(r"(?im)^([ \t]*[A-E][.)][ \t]*)(?:Check-square|SQUARE|□|☐|☑)[ \t]*", r"\1", texto)
     # Letras circuladas são marcadores somente se há uma sequência A/B.
     for alfabeto in ('ⒶⒷⒸⒹⒺ', 'ⓐⓑⓒⓓⓔ'):
         if all(re.search(r'(?m)^\s*'+c, texto) for c in alfabeto[:2]):
@@ -56,8 +58,45 @@ def contextos_explicitos(texto):
 def textos_rotulados(texto):
     from .lexico import _INICIO_QUESTAO
     saida = {}
-    for m in re.finditer(r'(?im)^Texto[ \t]+([A-Z0-9]+)[ \t]*\n', texto):
+    for m in re.finditer(r'(?im)^Text(?:o)?[ \t]+([A-Z0-9]+)[ \t]*\n', texto):
         fim = _INICIO_QUESTAO.search(texto, m.end())
         if fim and fim.start()-m.end() > 80:
             saida.setdefault(m.group(1).upper(), []).append((m.start(), texto[m.start():fim.start()].strip()))
     return saida
+
+
+CONTEXTO_RELATIVO = re.compile(
+    r'(?im)^(?:ATEN[ÇC][AÃ]O:\s*O texto a seguir refere-se [àa]s\s+(duas|tr[eê]s|\d+)\s+pr[óo]ximas quest[õo]es[^\n]*|'
+    r'READ TEXT\s+[IVX]+\s+AND ANSWER NEXT\s+(TWO|THREE|SEVEN|\d+)\s+QUESTIONS[^\n]*)\n')
+
+
+def contextos_relativos(texto, candidatos):
+    """Usa a contagem impressa e os marcadores reais dos blocos já reconhecidos."""
+    from .lexico import _INICIO_QUESTAO, _MARCADOR_QUESTAO, _juntar_linhas
+    from .segmentacao import partes_bloco
+    stems = {}
+    for block in candidatos:
+        marker = _MARCADOR_QUESTAO.match(block.strip())
+        parts = partes_bloco(block)
+        if marker and len(parts) >= 5:
+            stems[int(marker[1])] = _juntar_linhas(parts[0])[:60]
+    markers = []
+    for marker in _INICIO_QUESTAO.finditer(texto):
+        parsed = _MARCADOR_QUESTAO.match(marker[1])
+        number = int(parsed[1]) if parsed else None
+        if number in stems and _juntar_linhas(texto[marker.end():marker.end() + 600]).startswith(stems[number]):
+            markers.append((number, marker.start()))
+    declarations = list(CONTEXTO_RELATIVO.finditer(texto))
+    result = {}
+    words = {'duas': 2, 'tres': 3, 'três': 3, 'two': 2, 'three': 3, 'seven': 7}
+    for index, declaration in enumerate(declarations):
+        raw_count = (declaration[1] or declaration[2]).casefold()
+        count = int(raw_count) if raw_count.isdigit() else words[raw_count]
+        end = declarations[index + 1].start() if index + 1 < len(declarations) else len(texto)
+        following = [(number, pos) for number, pos in markers if declaration.end() <= pos < end][:count]
+        if not 0 < count <= 20 or len(following) != count or len({number for number, _ in following}) != count:
+            continue
+        passage = texto[declaration.start():following[0][1]].strip()
+        for number, _ in following:
+            result[number] = passage
+    return result

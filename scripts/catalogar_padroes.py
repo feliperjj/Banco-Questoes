@@ -7,6 +7,7 @@ or changes the question database.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections import defaultdict
@@ -32,6 +33,54 @@ from src.importador.perfis.documentos import (
 SAMPLES = ROOT / "samples"
 CATALOGO = carregar_catalogo(ROOT / "config" / "gabaritos.json", base_dir=SAMPLES)
 OUT = REPORTS_DIR / "catalogo_padroes.json"
+
+
+def inventariar_documentos(samples, catalogo, resultados_extracao=()):
+    """Inventário integral; papel confirmado vem do catálogo, não do nome."""
+    from src.importador.parser import quantidade_declarada
+    samples = Path(samples)
+    bindings = defaultdict(list)
+    observations = {normalizar_chave(item["arquivo"].removeprefix("samples/")): item
+                    for item in resultados_extracao}
+    for book, entry in catalogo.items():
+        if entry.get("confirmado") is not True:
+            continue
+        scope = {name: entry.get(name) for name in ("cargo", "codigo", "prova")}
+        bindings[normalizar_chave(book)].append({"papel": "caderno", "caderno": str(book), "escopo_catalogado": scope})
+        for field in ("gabarito", "complemento"):
+            if entry.get(field):
+                bindings[normalizar_chave(entry[field])].append({"papel": "gabarito", "caderno": str(book), "escopo_catalogado": scope})
+    documents = []
+    for path in sorted(samples.rglob("*.pdf")):
+        key = normalizar_chave(path.relative_to(samples).as_posix())
+        pages, texts = [], []
+        with pdfplumber.open(path) as pdf:
+            for number, page in enumerate(pdf.pages, 1):
+                text = page.extract_text() or ""
+                texts.append(text)
+                pages.append({"pagina": number, "caracteres_textuais": len(text.strip()), "imagens": len(page.images)})
+        text = "\n".join(texts)
+        roles = sorted({binding["papel"] for binding in bindings[key]})
+        candidate = "caderno" if _caderno_pdf(path) else "gabarito"
+        profile = classificar_caderno(text) if roles == ["caderno"] or not roles and candidate == "caderno" else classificar_gabarito(text)
+        has_text = any(page["caracteres_textuais"] for page in pages)
+        image_only = any(not page["caracteres_textuais"] and page["imagens"] for page in pages)
+        nature = "misto" if has_text and image_only else "textual" if has_text else "escaneado" if image_only else "sem_texto"
+        observation = observations.get(key, {})
+        documents.append({"arquivo": "samples/" + path.relative_to(samples).as_posix(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size,
+            "papel_confirmado": roles, "papel_candidato_sem_associacao": candidate if not roles else None,
+            "associacoes_confirmadas": bindings[key], "natureza": nature, "paginas": pages,
+            "reconhecimento_texto_linear": profile.como_dict(),
+            "quantidade_declarada_detectada": quantidade_declarada(text) if roles == ["caderno"] or not roles and candidate == "caderno" else None,
+            "quantidade_extraida_observada": observation.get("quantidade_extraida"),
+            "origem_contagem_extraida": "verificar_regressoes_perfis.py" if observation else None,
+            "total_conferido_independentemente": None,
+            "fidelidade_integral_conferida": False,
+            "observacao": "Reconhecimento linear e contagem não aprovam fidelidade; consultar o resultado do par e as pendências."})
+    return {"somente_leitura": True, "documentos": documents,
+        "total_documentos": len(documents),
+        "sem_associacao_confirmada": sum(not document["papel_confirmado"] for document in documents)}
 
 
 def _perfil_de_dict(dados: dict) -> PerfilDocumento:
@@ -155,7 +204,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Catalogar perfis e afunilar possíveis gabaritos.")
     parser.add_argument("--atualizar-funil", action="store_true",
                         help="Recalcula apenas o funil usando o último inventário salvo.")
+    parser.add_argument("--inventario-integral", type=Path, help="Grava metadados e hashes de todos os PDFs no caminho informado.")
+    parser.add_argument("--resultados-extracao", type=Path, help="Anexa contagens observadas do diagnóstico de regressões, sem tratá-las como referência independente.")
     args = parser.parse_args()
+    if args.inventario_integral:
+        observations = json.loads(args.resultados_extracao.read_text(encoding="utf-8")) if args.resultados_extracao else []
+        result = inventariar_documentos(SAMPLES, CATALOGO, observations)
+        args.inventario_integral.parent.mkdir(parents=True, exist_ok=True)
+        args.inventario_integral.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"{result['total_documentos']} PDFs; {result['sem_associacao_confirmada']} sem associação confirmada; inventário salvo em {args.inventario_integral}")
+        return
     if args.atualizar_funil:
         resultado = json.loads(OUT.read_text(encoding="utf-8"))
         cadernos = {k: _perfil_de_dict(v) for k, v in resultado["cadernos"].items()}

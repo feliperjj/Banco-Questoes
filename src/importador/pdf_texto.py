@@ -72,6 +72,16 @@ def _linhas_repetidas(paginas: list[str]) -> set[str]:
     }
 
 
+def _apenas_identificacao(texto, cargos):
+    def compact(value):
+        return re.sub(r'[\W_]+', '', unicodedata.normalize('NFKD', value).casefold())
+    known = {compact(role) for role in cargos if role}
+    lines = [line.strip() for line in texto.splitlines() if line.strip()]
+    return bool(known and any(compact(line) in known for line in lines)) and all(
+        compact(line) in known or re.fullmatch(r'(?i)p[áa]gina\s+\d+(?:\s+de\s+\d+)?', line)
+        or re.fullmatch(r'(?i)www\.pciconcursos\.com\.br', line) for line in lines)
+
+
 def _pagina_sem_texto_rotacionado(pagina):
     # Rodapés localizados na margem, identificados antes de dividir colunas.
     # Assim não sobra metade de um título anexada à última alternativa.
@@ -80,7 +90,8 @@ def _pagina_sem_texto_rotacionado(pagina):
         palavras = pagina.extract_words(x_tolerance=2, y_tolerance=3)
         for y, ws in _agrupar_palavras_por_linha(palavras):
             t = ' '.join(w['text'] for w in sorted(ws, key=lambda w:w['x0']))
-            if y > pagina.height*.90 and re.search(r'(?i)\b(?:provas?\s+[IV]+\b|p[áa]gina\s+\d|www\.|pcimarkpci)', t):
+            if (y > pagina.height*.90 and re.search(r'(?i)\b(?:provas?\s+(?:[IV]+|\d+)\b|p[áa]gina\s+\d|www\.|w\s+w\s+w\s*\.|planejamento e execu[çc][aã]o|IBFC_\d+\s*-\s*VERS[AÃ]O|pcimarkpci)', t)
+                    or y < pagina.height*.06 and re.search(r'(?i)\bpcimarkpci\b', t)):
                 faixas_rodape.append((y-2, max(w['bottom'] for w in ws)+2))
     def legivel(obj):
         if obj.get('object_type') != 'char':
@@ -240,6 +251,10 @@ def extrair_texto_pdf(caminho: str, *, usar_ocr=True) -> str:
     leitor_ocr = LeitorOCR()
     modo_colunas = False
     with pdfplumber.open(caminho) as pdf:
+        from .perfis.pdf_caixas import extrair_caixas
+        estruturado = extrair_caixas(pdf)
+        if estruturado is not None:
+            return estruturado
         from src.importador.cebraspe_layout import extrair_layout_cebraspe
         estruturado = extrair_layout_cebraspe(pdf)
         if estruturado is not None:
@@ -248,8 +263,29 @@ def extrair_texto_pdf(caminho: str, *, usar_ocr=True) -> str:
         estruturado = extrair_recuado(pdf)
         if estruturado is not None:
             return TextoExtraido(estruturado, "pdf_recuado_misto_v2", ["Confira tabelas e figuras na fonte; o texto pode não preservar sua disposição."])
+        # Comparar a linha inteira antes das colunas também cobre a última
+        # página sem questões, que pode repetir o cabeçalho em largura total.
+        edge_rows, occurrences = [], {}
+        for page in pdf.pages:
+            rows = []
+            for top, words in _agrupar_palavras_por_linha(page.extract_words(x_tolerance=2, y_tolerance=3)):
+                line = ' '.join(word['text'] for word in sorted(words, key=lambda word: word['x0']))
+                if (top < page.height * .075 or top > page.height * .90) and len(line) >= 8 and not re.match(r'(?i)^(?:quest[aã]o|item|assinale|marque)\b', line) and not PADRAO_ALTERNATIVA.match(line):
+                    rows.append((line, top - 1, max(word['bottom'] for word in words) + 1))
+                    occurrences.setdefault(line, set()).add(page.page_number)
+            edge_rows.append(rows)
+        repeated_edges = {line for line, pages in occurrences.items() if len(pages) >= max(3, int(len(pdf.pages) * .6))}
+        metadata_text = (pdf.pages[0].extract_text() or '') + '\n' + '\n'.join(sorted(repeated_edges)) if pdf.pages else ''
+        from .perfis.documentos import _metadados
+        cover_roles = _metadados(pdf.pages[0].extract_text() or '').get('cargo', ()) if pdf.pages else ()
         for numero, pagina in enumerate(pdf.pages, start=1):
             pagina_filtrada = _pagina_sem_texto_rotacionado(pagina)
+            bands = []
+            if numero > 1 or _parece_pagina_de_questoes(pagina.extract_text() or ''):
+                bands = [(top, bottom) for line, top, bottom in edge_rows[numero - 1] if line in repeated_edges]
+                if bands:
+                    pagina_filtrada = pagina_filtrada.filter(lambda obj: obj.get('object_type') != 'char'
+                        or not any(top <= obj.get('top', -1) <= bottom for top, bottom in bands))
             palavras = pagina_filtrada.extract_words(x_tolerance=2, y_tolerance=3, extra_attrs=["upright"])
             texto_normal = pagina_filtrada.extract_text(x_tolerance=2, y_tolerance=3) or ""
             topo_secao = _topo_primeira_secao(palavras)
@@ -272,9 +308,20 @@ def extrair_texto_pdf(caminho: str, *, usar_ocr=True) -> str:
             perfil_pagina = "pdf_duas_colunas_v1" if modo_colunas else "pdf_linear_v1"
             if not texto.strip():
                 if usar_ocr:
-                    texto, aviso = leitor_ocr.ler(pagina)
+                    # O OCR não pode recolocar o cabeçalho que a leitura
+                    # digital acabou de remover. O corpo escaneado permanece.
+                    top_bands = [(top, bottom) for top, bottom in bands if top < pagina.height * .075]
+                    bottom_bands = [(top, bottom) for top, bottom in bands if top > pagina.height * .90]
+                    ocr_bounds = (0, max((bottom for _, bottom in top_bands), default=0), pagina.width,
+                                  min((top for top, _ in bottom_bands), default=pagina.height))
+                    ocr_page = pagina.crop(ocr_bounds) if bands else pagina
+                    texto, aviso = leitor_ocr.ler(ocr_page)
                     avisos.append(f"Página {numero}: {aviso}")
                     perfil_pagina = "pdf_ocr_v1"
+                    if _apenas_identificacao(texto, cover_roles):
+                        texto = ''
+                        perfil_pagina = 'pdf_identificacao_v1'
+                        avisos.append(f'Página {numero}: contém somente a identificação do cargo e rodapé; não foi anexada à última questão.')
                 else:
                     avisos.append(f"Página {numero}: sem texto; OCR desativado.")
             elif not modo_colunas:
@@ -289,16 +336,23 @@ def extrair_texto_pdf(caminho: str, *, usar_ocr=True) -> str:
             else:
                 logger.warning("Página %s sem texto extraível no arquivo %s", numero, caminho)
 
-    repetidas = _linhas_repetidas(paginas)
+    # Repetição de texto, por si só, não torna uma alternativa ou um
+    # enunciado em cabeçalho. Exigir também sua localização na borda do PDF.
+    repetidas = _linhas_repetidas(paginas) & repeated_edges
     resultado = []
     for pagina in paginas:
         linhas = [
             linha for linha in pagina.splitlines()
-            if linha not in repetidas and not re.fullmatch(r"página\s+\d+(?:\s+de\s+\d+)?", linha, re.IGNORECASE)
+            if linha not in repetidas and not re.fullmatch(r"p[áa]gina\s+\d+(?:\s+de\s+\d+)?", linha, re.IGNORECASE)
         ]
         resultado.append("\n".join(linhas))
     texto_final = "\n".join(parte for parte in resultado if parte).strip()
     logger.info("PDF extraído: %s caracteres de %s páginas", len(texto_final), len(paginas))
-    return TextoExtraido(texto_final, avisos=avisos, paginas=perfis_paginas)
+    result = TextoExtraido(texto_final, avisos=avisos, paginas=perfis_paginas)
+    # Cabeçalhos removidos do corpo continuam disponíveis como metadados;
+    # não devem voltar para enunciados, alternativas ou textos compartilhados.
+    from .parser import extrair_metadados_prova
+    result.metadados_fonte = extrair_metadados_prova(metadata_text)
+    return result
 
 

@@ -36,6 +36,7 @@ class ImportedExamPreviewDialog(QDialog):
         qtd_avaliaveis = int(prova.get("qtd_avaliaveis") or 0)
         qtd_total = int(prova.get("qtd_questoes") or len(questoes))
         parcial = 0 < qtd_avaliaveis < qtd_total
+        self._partial_notice = f"Treino parcial: {qtd_avaliaveis} de {qtd_total} questões verificadas. " if parcial else ""
         self.notice = QLabel(
             "Consulta das questões. As respostas só serão registradas ao iniciar uma prova."
             if prova.get("pronta") else
@@ -139,6 +140,8 @@ class ImportedExamPreviewDialog(QDialog):
             self.notice.setText("Consulta das questões. As respostas só serão registradas ao iniciar uma prova."
                                 if self.prova.get("pronta") else
                                 "Consulta disponível. Esta questão ainda depende de conferência com a fonte.")
+        if self._partial_notice:
+            self.notice.setText(self._partial_notice + self.notice.text())
         number = question.get("numero_oficial")
         self.official_number.setText(
             f"Número oficial: {number}" if number is not None

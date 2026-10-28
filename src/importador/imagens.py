@@ -7,6 +7,12 @@ import re
 from pathlib import Path
 
 import pdfplumber
+from .pdf_render import render_image, rendering_batch
+
+
+def _render_image(pdf, page_index, bbox):
+    """Renderiza fora do processo Qt e devolve uma cópia independente."""
+    return render_image(pdf.stream.name, page_index + 1, bbox, scale=150 / 72)
 
 
 _REF_VISUAL = re.compile(
@@ -178,13 +184,12 @@ def _recortar_regiao(pdf, questao: dict, frase: str, duas_colunas_pdf: bool = Fa
     fundo = min(pagina.height, max(topo + 80, fundo))
     # Para referências "a seguir" no rodapé, a figura pode começar na página
     # seguinte. Inclua apenas seu topo, sem anexar a página inteira.
-    imagem = pagina.crop((limites_x[0], topo, limites_x[1], fundo)).to_image(resolution=150).original.convert("RGB")
+    imagem = _render_image(pdf, indice_referencia, (limites_x[0], topo, limites_x[1], fundo))
     if referencia and _REFERENCIA_ABAIXO.search(frase) and referencia["top"] > pagina.height * 0.72 and indice + 1 < len(pdf.pages):
         proxima_pagina = pdf.pages[indice + 1]
         limite_proximo = _limites_horizontais(proxima_pagina, ancora, duas_colunas_pdf)
-        complemento = proxima_pagina.crop(
-            (limite_proximo[0], 20, limite_proximo[1], min(proxima_pagina.height, 320))
-        ).to_image(resolution=150).original.convert("RGB")
+        complemento = _render_image(pdf, indice + 1,
+            (limite_proximo[0], 20, limite_proximo[1], min(proxima_pagina.height, 320)))
         from PIL import Image
         largura = max(imagem.width, complemento.width)
         combinado = Image.new("RGB", (largura, imagem.height + complemento.height), "white")
@@ -194,6 +199,7 @@ def _recortar_regiao(pdf, questao: dict, frase: str, duas_colunas_pdf: bool = Fa
     return imagem
 
 
+@rendering_batch
 def anexar_imagens_referenciadas(caminho: str | Path, questoes: list[dict], raiz: str | Path) -> int:
     """Salva um recorte contextual para cada questão que cita uma figura."""
     caminho, raiz = Path(caminho), Path(raiz)
@@ -212,7 +218,13 @@ def anexar_imagens_referenciadas(caminho: str | Path, questoes: list[dict], raiz
     with pdfplumber.open(caminho) as pdf:
         duas_colunas_pdf = _pdf_tem_duas_colunas(pdf)
         for questao, frase in alvos:
-            imagem = _recortar_regiao(pdf, questao, frase, duas_colunas_pdf)
+            try:
+                imagem = _recortar_regiao(pdf, questao, frase, duas_colunas_pdf)
+            except (OSError, ValueError) as error:
+                imagem = None
+                questao["aviso_importacao"] = " ".join(filter(None, [
+                    questao.get("aviso_importacao"), f"Falha no recorte visual: {error}",
+                ]))
             if imagem is None:
                 questao["aviso_importacao"] = " ".join(filter(None, [
                     questao.get("aviso_importacao"),
@@ -222,6 +234,6 @@ def anexar_imagens_referenciadas(caminho: str | Path, questoes: list[dict], raiz
             numero = int(questao.get("numero") or 0)
             caminho_imagem = destino / f"{digest}_q{numero}_crop.png"
             imagem.save(caminho_imagem, optimize=True)
-            questao["imagem_path"] = caminho_imagem.relative_to(raiz).as_posix()
+            questao["imagem_path"] = str(caminho_imagem.resolve())
             salvas += 1
     return salvas

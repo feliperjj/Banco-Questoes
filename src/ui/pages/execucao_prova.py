@@ -296,6 +296,7 @@ class ExecucaoProvaPage(QWidget):
         while self.alternativas_layout.count():
             item = self.alternativas_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
 
     def mostrar_questao_atual(self):

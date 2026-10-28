@@ -1,9 +1,10 @@
 from pathlib import Path
 from threading import Event
 from time import monotonic
+from time import sleep
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEventLoop, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -40,6 +41,20 @@ def pagina():
     return page
 
 
+def aguardar_salvamento(page):
+    if not page.ocupada:
+        return
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.setSingleShot(True)
+    page.task.idle.connect(loop.quit)
+    timer.timeout.connect(loop.quit)
+    timer.start(10000)
+    loop.exec()
+    page.task.idle.disconnect(loop.quit)
+    assert not page.ocupada, "O salvamento em segundo plano não terminou no prazo."
+
+
 def test_rascunho_sobrevive_navegacao_e_filtro(app):
     page = pagina()
     page.editor.enunciado_input.setPlainText('Texto corrigido')
@@ -53,15 +68,26 @@ def test_rascunho_sobrevive_navegacao_e_filtro(app):
     assert page.editor.data()['comentario'] == 'Preservar'
 
 
+def test_caderno_catalogado_preenche_cargo_e_tipo_confirmados(app):
+    page = ImportacaoPage()
+    page.caminho_questoes_pendente = str(Path(__file__).resolve().parents[1] / 'samples' / 'administrador-fgv.pdf')
+    page._finalizar_importacao_questoes([questao()])
+
+    assert page.cargo_gabarito_input.text() == 'ADMINISTRADOR'
+    assert page.codigo_gabarito_input.text() == 'PROVA TIPO 1'
+
+
 def test_salvar_individual_e_lote_nao_duplica(app):
     page = pagina()
     page.salvar_questao()
+    aguardar_salvamento(page)
     assert len(page.session.pendentes) == 1
     assert not page.editor.isEnabled()
     assert page.steps.currentIndex() == 2
     page.salvar_todas()
+    aguardar_salvamento(page)
     page.salvar_todas()
-    assert Questao.select().count() == 2
+    assert Questao.select().count() == 2, page.feedback.text()
     assert page.session.estado == EstadoImportacao.CONCLUIDO
 
 
@@ -72,11 +98,26 @@ def test_falha_persistencia_permite_tentar_novamente(app, monkeypatch):
         raise RuntimeError('Banco indisponível')
     monkeypatch.setattr(repo, 'criar_questoes_em_lote', falhar)
     page.salvar_todas()
+    aguardar_salvamento(page)
     assert page.session.pendentes == [0, 1]
     assert Questao.select().count() == 0
     monkeypatch.setattr(repo, 'criar_questoes_em_lote', salvar)
     page.salvar_todas()
-    assert Questao.select().count() == 2
+    aguardar_salvamento(page)
+    assert Questao.select().count() == 2, page.feedback.text()
+
+
+def test_cancelar_leitura_preserva_revisao_anterior(app):
+    page = pagina()
+    page.editor.enunciado_input.setPlainText("Alteração recuperável")
+    page.session.editar(0, page.editor.data())
+    page._start(lambda: sleep(0.2), "Lendo arquivo de teste.")
+    page._cancelar_operacao()
+    aguardar_salvamento(page)
+
+    assert page.session.questoes[0]["enunciado"] == "Alteração recuperável"
+    assert page.session.pendentes == [0, 1]
+    assert "cancelada" in page.feedback.text().lower()
 
 
 @pytest.mark.parametrize('falha', [True, False])
@@ -150,15 +191,18 @@ def test_navegacao_e_rodape_na_janela_minima(app, monkeypatch):
     window.pages.setCurrentIndex(2)
     page = window.pages.widget(2)
     page._finalizar_importacao_questoes([questao()])
+    page.nome_prova_input.setText("Prova de teste")
     page.steps.setCurrentIndex(2)
     app.processEvents()
     assert window.menu.currentRow() == 2
     assert window.width() == 960
+    assert window.menu.horizontalScrollBar().maximum() == 0
     for button in (page.btn_salvar_questao, page.btn_salvar_todas):
         assert button.isVisible()
         assert page.rect().contains(button.geometry())
     QTest.mouseClick(page.btn_salvar_questao, Qt.LeftButton)
-    assert Questao.select().count() == 1
+    aguardar_salvamento(page)
+    assert Questao.select().count() == 1, page.feedback.text()
     avisos = []
     monkeypatch.setattr(QMessageBox, 'information', lambda *a: avisos.append(a))
     page.session.estado = EstadoImportacao.LENDO
@@ -166,3 +210,26 @@ def test_navegacao_e_rodape_na_janela_minima(app, monkeypatch):
     assert avisos
     page.session.restaurar_estado()
     assert window.close()
+
+
+def test_importacao_reabre_rascunho_salvo_com_fonte_integra(app, tmp_path, monkeypatch):
+    import src.models.importacao_rascunho as rascunho
+
+    source = tmp_path / "caderno.pdf"
+    source.write_bytes(b"fonte de teste")
+    monkeypatch.setattr(rascunho, "RASCUNHO_PATH", tmp_path / "importacao.json")
+    window = MainWindow()
+    page = window.pages.widget(2)
+    page.session.carregar([questao()], str(source))
+    page.nome_prova_input.setText("Prova retomada")
+    page._refresh_list()
+    assert window.close()
+
+    resumed_window = MainWindow()
+    resumed = resumed_window.pages.widget(2)
+    assert resumed.session.caminho == str(source)
+    assert resumed.session.questoes[0]["enunciado"] == questao()["enunciado"]
+    assert resumed.nome_prova_input.text() == "Prova retomada"
+    assert "recuperado" in resumed.feedback.text().casefold()
+    resumed._draft_timer.stop()
+    resumed_window.close()

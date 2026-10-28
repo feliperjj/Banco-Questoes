@@ -25,11 +25,22 @@ _ALT = re.compile(r"^\(?([A-Ea-e])\)?[.)\-:]?\s+")
 
 def readable_source_page(page):
     """Texto digital sem sobreimpressão/rodapé; os pixels originais são preservados."""
+    cached = getattr(page, "_readable_source_page_cache", None)
+    if cached is not None:
+        return cached
+    original = page
     if hasattr(page, "dedupe_chars"):
         page = page.dedupe_chars(tolerance=.3)
     if hasattr(page, "filter"):
         from .pdf_texto import _pagina_sem_texto_rotacionado
         page = _pagina_sem_texto_rotacionado(page)
+    from .perfis.pdf_paginas import limpar_cabecalhos_julgamento
+    page, body_top = limpar_cabecalhos_julgamento(page)
+    page._source_body_top = body_top
+    # A página pertence ao documento aberto por source_pdf. O cache desse
+    # documento já inclui caminho, tamanho e mtime; uma fonte alterada abre
+    # outro documento e não reaproveita esta leitura derivada.
+    original._readable_source_page_cache = page
     return page
 
 
@@ -150,8 +161,21 @@ def _contains_anchor(candidate: dict, text: str) -> bool:
 
 def _contains_complete_support(support: str, text: str) -> bool:
     """Context support is authoritative only when the complete text is present."""
-    needle = _norm(support)
-    hay = _norm(text)
+    def body(value):
+        # PDFs with a side-by-side article and questions can place repeated
+        # page headers before the context and after its citation in text order.
+        # Bound the comparison by the explicit context label and its citation;
+        # the source region still has to contain the complete body in order.
+        label = re.search(r"(?im)^[ \t]*texto(?:[ \t]+(?:de[ \t]+apoio|base|[A-Z0-9]+))?[ \t]*(?:\n|$)", value or "")
+        if label:
+            value = value[label.start():]
+        ending = re.search(r"(?i)\bfragmento\s+adaptado\b", value or "")
+        if ending:
+            value = value[:ending.end()]
+        return _norm(value)
+
+    needle = body(support)
+    hay = body(text)
     return bool(needle) and needle in hay
 
 
@@ -160,6 +184,8 @@ def _trim_header_footer(page, bbox):
     # edge lines are removed, never body lines or long alternatives.
     x0, top, x1, bottom = bbox
     height = float(page.height)
+    if top == 0 and 0 < getattr(page, '_source_body_top', 0) < bottom:
+        top = page._source_body_top
     return (x0, max(top, 0), x1, min(bottom, height))
 
 
@@ -172,7 +198,8 @@ def _column_bounds(page, marker, physical):
         if not any(m.get("profile") == "transpetro_arial_bold_v1" for m in page_marks):
             words = _words(page)
             middle = float(page.width) / 2
-            body = [w for w in words if 60 < float(w.get("top", 0)) < float(page.height) - 40]
+            body_top = max(60, getattr(page, '_source_body_top', 0))
+            body = [w for w in words if body_top < float(w.get("top", 0)) < float(page.height) - 40]
             crossing = sum(float(w.get("x0", 0)) < middle - 2 and float(w.get("x1", 0)) > middle + 2 for w in body)
             both_sides = (sum(float(w.get("x0", 0)) < middle - 25 for w in body) > 15
                           and sum(float(w.get("x0", 0)) > middle + 25 for w in body) > 15)
@@ -198,7 +225,7 @@ def _raw_region_text(page, bbox):
     return _region_text(page, bbox)
 
 
-def _context_physical_regions(pdf, physical, target):
+def _context_physical_regions(pdf, physical, target, *, prefix_only=False):
     """Build ordered, bounded regions preceding a question marker."""
     regions = []
     for page_no in range(1, target["page"] + 1):
@@ -212,7 +239,11 @@ def _context_physical_regions(pdf, physical, target):
             else:
                 representative = marks[0]
                 left, right = _column_bounds(page, representative, physical)
-                columns = [(left, right, representative["column"])]
+                # A coluna sem números pode conter todo o início do artigo.
+                columns = ([(0.0, float(page.width) / 2, 0),
+                            (float(page.width) / 2, float(page.width), 1)]
+                           if right - left < float(page.width) * .75 else
+                           [(left, right, representative["column"])])
         else:
             columns = [(0.0, float(page.width), 0)]
         for left, right, column in columns:
@@ -221,14 +252,81 @@ def _context_physical_regions(pdf, physical, target):
             bottom = float(page.height)
             if page_no == target["page"] and column == target["column"]:
                 bottom = float(target["bbox"]["top"])
+            if prefix_only:
+                column_markers = [m['bbox']['top'] for m in marks if m['column'] == column]
+                bottom = min([bottom] + column_markers) - (1 if column_markers else 0)
             if bottom <= 1:
                 continue
             bbox = _trim_header_footer(page, (left, 0.0, right, bottom))
             text = _region_text(page, bbox)
             if text.strip():
                 regions.append({"page": page_no, "column": column, "bbox": bbox, "text": text,
-                                "raw_text": _raw_region_text(page, bbox)})
+                                "raw_text": _raw_region_text(page, bbox), '_source_page': page})
     return regions
+
+
+def _context_window(support, pool):
+    full = '\n'.join(region['text'] for region in pool)
+    raw = '\n'.join(region['raw_text'] for region in pool)
+    if not (_contains_complete_support(support, full) or _contains_complete_support(support, raw)):
+        return None
+    for end in range(len(pool)):
+        for start in range(end, -1, -1):
+            window = pool[start:end + 1]
+            text = '\n'.join(region['text'] for region in window)
+            raw = '\n'.join(region['raw_text'] for region in window)
+            if _contains_complete_support(support, text) or _contains_complete_support(support, raw):
+                if re.match(r'(?i)^(?:READ TEXT\b|ATEN[ÇC][AÃ]O:)', support.strip()):
+                    window = _bound_relative_context(support, window)
+                    text = '\n'.join(region['text'] for region in window)
+                return window, text.strip(), end + 1
+    return None
+
+
+def _bound_relative_context(support, window):
+    """A instrução impressa limita o início; a citação limita o fim do apoio."""
+    result = [dict(region) for region in window]
+    lines = [line.strip() for line in support.splitlines() if line.strip()]
+    for index, anchor, edge in [(0, lines[0], 'top'), (len(result) - 1, lines[-1], 'bottom')]:
+        region = result[index]
+        page = region.get('_source_page')
+        if page is None or len(anchor) < 8:
+            continue
+        pattern = r'\s+'.join(re.escape(word) for word in anchor.split())
+        matches = page.crop(region['bbox']).search(pattern, regex=True, case=False)
+        if len(matches) != 1:
+            continue
+        x0, top, x1, bottom = region['bbox']
+        if edge == 'top':
+            top = max(top, matches[0]['top'] - 1)
+        else:
+            bottom = min(bottom, matches[0]['bottom'] + 1)
+        if bottom <= top:
+            continue
+        region['bbox'] = (x0, top, x1, bottom)
+        region['text'] = _region_text(page, region['bbox'])
+        region['raw_text'] = _raw_region_text(page, region['bbox'])
+    text = '\n'.join(region['text'] for region in result)
+    raw = '\n'.join(region['raw_text'] for region in result)
+    return result if _contains_complete_support(support, text) or _contains_complete_support(support, raw) else window
+
+
+def _context_with_repeated_command(support, pool):
+    """Texto comum e novo comando explicitamente ligado ao mesmo identificador."""
+    commands = list(re.finditer(r'(?i)\bjulgue\b', support))
+    if len(commands) != 2:
+        return None
+    prefix, command = support[:commands[-1].start()], support[commands[-1].start():]
+    reference = re.search(r'(?i)\btexto\s+([a-z0-9]*\d[a-z0-9]*)\b', command)
+    if len(prefix) < 450 or not reference or not re.search(r'(?i)\b' + re.escape(reference[1]) + r'\b', prefix):
+        return None
+    first = _context_window(prefix, pool)
+    if not first:
+        return None
+    second = _context_window(command, pool[first[2]:])
+    if not second:
+        return None
+    return first[0] + second[0], first[1] + '\n' + second[1]
 
 
 def _image_context_region(page, number, physical):
@@ -323,6 +421,9 @@ def extract_pdf_source(path, *, expected_questions: list[dict], asset_dir: Path 
             continue
         words = _words(page)
         page_words_cache[page_no] = words
+        from .perfis.pdf_caixas import CAIXA
+        box_margins = [float(word['x0']) for word in words
+                       if re.fullmatch(r'[a-e][.)]', str(word.get('text', '')), re.I)] if len(CAIXA.findall(page_plain)) >= 3 else []
         if transpetro_profile:
             # TRANSPETRO's verified source profile: Arial Bold 11 markers at
             # x=28/310, with two fixed content columns. Restricting by font,
@@ -380,10 +481,15 @@ def extract_pdf_source(path, *, expected_questions: list[dict], asset_dir: Path 
                 for word in line:
                     token = str(word.get("text", ""))
                     m = re.fullmatch(r"(\d{1,3})[.)\-:]", token)
-                    if m:
+                    # Uma quantidade no meio de uma frase/alternativa não
+                    # é marcador. Exigir a margem física de uma coluna.
+                    if m and (float(word.get('x0', 0)) < page.width * .20
+                              or page.width * .45 < float(word.get('x0', 0)) < page.width * .60):
                         marker_lines.append((int(m.group(1)), [word]))
             for number, marker_line in marker_lines:
                 box = _bbox(marker_line, page)
+                if box_margins and not any(abs(box['x0'] - margin) <= 5 for margin in box_margins):
+                    continue
                 # Marker columns are kept separate; this prevents Q68/Q70 in two
                 # columns from becoming one region when their vertical ranges cross.
                 col = 0 if box["x0"] < float(page.width) / 2 else 1
@@ -393,7 +499,20 @@ def extract_pdf_source(path, *, expected_questions: list[dict], asset_dir: Path 
     # Recover aligned markers whose embedded font metadata is unreliable.
     # Expected text is used only as a local, unique anchor; order/count never
     # supplies a missing number.
+    expected_by_number = {q.get("numero"): q for q in expected_questions
+                          if isinstance(q.get("numero"), int)}
     known = set()
+    for marker in physical:
+        expected = expected_by_number.get(marker["numero"])
+        if expected is None:
+            continue
+        page = pdf.pages[marker["page"] - 1]
+        left, right = _column_bounds(page, marker, physical)
+        probe_box = (left, float(marker["bbox"]["top"]), right,
+                     min(float(page.height), float(marker["bbox"]["top"]) + 250))
+        probe = page.crop(probe_box).extract_text() or ""
+        if _anchor(expected, probe) or _anchor(expected, _raw_region_text(page, probe_box)):
+            known.add(marker["numero"])
     for expected in expected_questions:
         number = expected.get("numero")
         if not isinstance(number, int) or number in known:
@@ -433,7 +552,6 @@ def extract_pdf_source(path, *, expected_questions: list[dict], asset_dir: Path 
     # Elimina números de parágrafo/cabeçalho ANTES de tratar duplicatas.
     # Um número isolado sem a âncora imediata da sua questão não é marcador.
     anchored = []
-    expected_by_number = {q.get("numero"): q for q in expected_questions if isinstance(q.get("numero"), int)}
     for marker in physical:
         expected = expected_by_number.get(marker["numero"])
         page = pdf.pages[marker["page"] - 1]
@@ -588,23 +706,63 @@ def extract_pdf_source(path, *, expected_questions: list[dict], asset_dir: Path 
             # without ever borrowing a same-number-looking block from another
             # booklet.
             context_hit = None
+            prefix_pool = _context_physical_regions(pdf, physical, mark, prefix_only=True)
+            prefix_hit = _context_window(support, prefix_pool)
+            if prefix_hit:
+                context_hit = prefix_hit[:2]
+            else:
+                context_hit = _context_with_repeated_command(support, prefix_pool)
             context_pool = _context_physical_regions(pdf, physical, mark)
             # Search contiguous physical regions in reading order. This allows
             # support to flow from a left column to a right column or to the
             # next page, while preserving every evidence rectangle.
-            for end in range(len(context_pool)):
-                joined = ""
-                raw_joined = ""
-                for start in range(end, -1, -1):
-                    joined = context_pool[start]["text"] + "\n" + joined
-                    raw_joined = context_pool[start]["raw_text"] + "\n" + raw_joined
-                    if _contains_complete_support(support, joined) or _contains_complete_support(support, raw_joined):
-                        context_hit = (context_pool[start:end + 1], joined.strip())
+            full_text = "\n".join(region["text"] for region in context_pool)
+            full_raw_text = "\n".join(region["raw_text"] for region in context_pool)
+            # Most failures are genuinely missing/incomplete source context.
+            # Prove that the complete passage is absent before trying every
+            # contiguous window; this negative precheck cannot certify a hit.
+            if not context_hit and (_contains_complete_support(support, full_text)
+                    or _contains_complete_support(support, full_raw_text)):
+                for end in range(len(context_pool)):
+                    joined = ""
+                    raw_joined = ""
+                    for start in range(end, -1, -1):
+                        joined = context_pool[start]["text"] + "\n" + joined
+                        raw_joined = context_pool[start]["raw_text"] + "\n" + raw_joined
+                        if _contains_complete_support(support, joined) or _contains_complete_support(support, raw_joined):
+                            context_hit = (context_pool[start:end + 1], joined.strip())
+                            break
+                    if context_hit:
                         break
-                if context_hit:
-                    break
+            if not context_hit:
+                # Some two-column booklets print a shared passage beside the
+                # first questions, so physical reading order places part of
+                # the passage after the question marker. Search complete
+                # columns on the same/preceding pages, still requiring the
+                # full explicit passage text before accepting the region.
+                for page_no in range(1, mark["page"] + 1):
+                    page = pdf.pages[page_no - 1]
+                    middle = float(page.width) / 2
+                    for column, bounds in enumerate(((0.0, middle), (middle, float(page.width)))):
+                        if page_no == mark["page"] and column > mark["column"]:
+                            continue
+                        context_bbox = _trim_header_footer(page, (bounds[0], 0.0, bounds[1], float(page.height)))
+                        text = _region_text(page, context_bbox)
+                        raw_text = _raw_region_text(page, context_bbox)
+                        if _contains_complete_support(support, text) or _contains_complete_support(support, raw_text):
+                            context_hit = ([{"page": page_no, "column": column, "bbox": context_bbox,
+                                             "text": text, "raw_text": raw_text}], text.strip())
+                            break
+                    if context_hit:
+                        break
             if context_hit:
                 hit_regions, context_text = context_hit
+                if re.match(r'(?i)^(?:READ TEXT\b|ATEN[ÇC][AÃ]O:)', support.strip()):
+                    # Aplicar os limites também às buscas de coluna completa,
+                    # usadas quando o apoio aparece depois de outra questão.
+                    hit_regions = _bound_relative_context(support, [
+                        {**hit, '_source_page': pdf.pages[hit['page'] - 1]} for hit in hit_regions])
+                    context_text = '\n'.join(hit['text'] for hit in hit_regions)
                 q["texto_apoio"] = context_text.strip()
                 for region_index, hit in enumerate(hit_regions):
                     cb = hit["bbox"]

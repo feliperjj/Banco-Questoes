@@ -276,12 +276,23 @@ A importação agora segue três etapas: **Arquivo → Gabarito → Revisão**.
 Na revisão, filtre questões sem gabarito, corrija o texto e classifique intervalos
 pelo número oficial. As edições permanecem no rascunho ao mudar de questão ou aba.
 Os botões de salvar ficam fora da área de rolagem; salvar uma questão e depois
-o restante do mesmo lote não duplica os itens já salvos.
+o restante do mesmo lote não duplica os itens já salvos. Reimportar PDFs com o
+mesmo conteúdo reutiliza a prova existente; para conteúdo corrigido, a revisão
+permite criar explicitamente uma nova versão, preservando versões usadas em tentativas.
 
 O acervo e a importação usam o mesmo editor, com abas de conteúdo e classificação.
-O acervo oferece busca e filtros por situação do gabarito. Falhas de leitura ou
-gravação preservam a revisão atual. Rascunhos de importação ficam em memória:
-ao fechar ou substituir um lote não salvo, o aplicativo pede confirmação.
+O acervo oferece busca e filtros por situação do gabarito. Falhas e cancelamentos
+seguros de leitura ou gravação preservam a revisão atual. Rascunhos de importação
+são salvos localmente com hashes das fontes, permitem fechar e retomar a etapa e
+recusam a retomada quando um arquivo mudou ou desapareceu.
+
+Após ler o gabarito, selecione nas listas o cargo, código e versão reconhecidos
+quando houver várias opções. A escolha divergente do caderno bloqueia o vínculo.
+Em PDFs mistos, use **Conferir leitura por página** para corrigir o leitor de cada
+página. Um documento sem questões reconhecidas mantém esse diagnóstico e pode
+ser retomado pelo rascunho. Após salvar, **Abrir prova e pendências** abre a
+conferência e oferece a prova original ou o treino parcial identificado; o botão
+**Gerar simulado aleatório** leva ao gerador com seus filtros e quantidades.
 
 A base continua em PySide6, sem nova dependência visual. Os testes de regressão
 estão em `tests/test_ui_reforma.py`. Para gerar capturas com banco temporário:
@@ -297,4 +308,26 @@ python -m scripts.verificar_ui_reforma --output outputs/ui-125
 
 O importador combina perfis especializados, segmentação geral e revisão de conflitos. Consulte [formatos, limites e diagnóstico](docs/IMPORTACAO_HIBRIDA.md). O comando `python scripts/diagnosticar_formato.py caderno.pdf --saida diagnostico.json` permite inspecionar a extração sem gravar no banco.
 
+A integração de dois funis documentais ainda está em validação; perfis reconhecidos não garantem que o conteúdo esteja elegível. Consulte o [relatório de execução e pendências](docs/RELATORIO_DOIS_FUNIS_ESPECIALIZADOS_LUNA.md).
+
 Para comparar uma nova extração dos PDFs locais com o acervo sem aplicar alterações, execute `python scripts/reimportar_samples.py`. A proposta não atualiza o banco; diferenças e correspondências por ordem continuam pendentes de conferência.
+# Caso real validado: EPAGRI/S201
+
+Os dois PDFs enviados pelo usuário foram importados e resolvidos pela interface
+em banco isolado: 50 questões, 50 respostas associadas, 46 elegíveis e quatro
+anulações preservadas (16, 18, 19 e 36). Treino parcial com retomada e simulado
+aleatório concluíram com 46/46 acertos. A consulta mantém a composição de 50
+itens e informa explicitamente o treino parcial.
+
+O relatório `docs/RELATORIO_DOIS_FUNIS_ESPECIALIZADOS_LUNA.md` distingue esse
+resultado do aceite irrestrito do catálogo e da generalização, que não foram comprovados.
+Os PDFs têm conteúdo equivalente a um par conhecido; não são uma avaliação
+independente de generalização. O banco de uso real não foi reimportado.
+
+## Fechamento real dos dois funis — 28/10
+
+Três famílias passaram pela interface em bancos isolados: EPAGRI/S201 (50 itens/46 elegíveis), Morungaba com rótulos QUESTÃO (40/38) e EMBRAPA/Sistemas C/E com texto compartilhado (100/94). Os itens restantes são anulados. Composições completas preservadas; treinos parciais com retomada e simulados aleatórios concluídos com 46/46, 38/38 e 94/94.
+
+Dataprev tipo 4: 70 respostas conferidas no quadro da página 14; tipo 3 recusado. O gabarito é preliminar e a identidade impressa é insuficiente para certificação independente. São 70 questões para conferência e zero elegíveis, sem simulado. O código no nome do arquivo não substitui comprovação documental. Permanecem necessários gabarito definitivo e identidade verificável/revisão humana efetiva.
+
+Apoios relativos e recursos compartilhados foram preservados. Cabeçalhos/rodapés saem do corpo mantendo banca/ano documentais; números internos não sobrescrevem a disciplina de questões anteriores. O relatório de execução reúne evidências, limites e validações finais. Os três pares conhecidos e a Dataprev ajustada não comprovam generalização cega. OCR de digitalização real também não foi comprovado.

@@ -24,6 +24,46 @@ def _normalizar(texto: str) -> str:
     return re.sub(r"\s+", " ", texto).casefold().strip()
 
 
+def normalizar_versao(value: str | None) -> str:
+    label = re.sub(r"(?i)^(?:prova\s+tipo|prova|tipo|t)\s*", "", str(value or "").strip()).upper()
+    return {"I": "1", "II": "2", "III": "3", "IV": "4", "V": "5", "X": "10"}.get(label, label)
+
+
+def versoes_declaradas(texto):
+    # T11/T12 são códigos de cargo frequentes; a abreviação de versão aceita
+    # apenas T1–T4. Os rótulos PROVA/TIPO também aceitam números romanos.
+    pattern = r"(?i)\b(prova|tipo)\s*(\d+|IV|III|II|I|V|X)\b|\b(t)\s*([1-4])\b"
+    return [(match.group(1) or match.group(3), normalizar_versao(match.group(2) or match.group(4)))
+            for match in re.finditer(pattern, texto)]
+
+
+def versao_da_selecao(value):
+    text = str(value or "").strip()
+    labels = versoes_declaradas(text)
+    if len(labels) == 1 and re.fullmatch(r"(?i)(?:prova\s+tipo|prova|tipo)\s*(?:\d+|[ivx]+)|t\s*[1-4]", text):
+        return labels[0][1]
+    return ""
+
+
+def cabecalho_codigo_cargo(linha):
+    match = re.match(r"(?i)^\s*([A-Z]\d{2,})\s+(.+?)\s*$", linha)
+    if not match:
+        return None
+    title = re.split(r"(?i)\s*\(\s*c[oó]d\.?\s*(?:da\s+)?vaga\s*:", match.group(2), maxsplit=1)[0].strip(" -–—")
+    if not re.search(r"(?i)\b(analista|agente|auditor|administrador|assistente|t[eé]cnico|pesquisador|professor|engenheiro|estat[ií]stico|qu[ií]mico)\b", title):
+        return None
+    return match.group(1).upper(), title
+
+
+def situacao_gabarito(texto):
+    prefix = r'(?i)(?:gabaritos?|resultados?)\s+(?:oficia(?:l|is)\s*)?(?:[-–—:]\s*)?'
+    if re.search(prefix + r'preliminar(?:es)?', texto):
+        return 'preliminar'
+    if re.search(prefix + r'definitivos?', texto):
+        return 'definitivo'
+    return 'documento_fornecido'
+
+
 @dataclass(frozen=True)
 class PerfilDocumento:
     tipo: str
@@ -36,6 +76,7 @@ class PerfilDocumento:
     metadados: dict[str, tuple[str, ...]] | None = None
     intervalo_questoes: tuple[int, int] = ()
     quantidade_respostas: int = 0
+    situacao: str = 'nao_declarada'
 
     def como_dict(self) -> dict:
         return asdict(self)
@@ -55,21 +96,35 @@ def _metadados(texto: str) -> dict[str, tuple[str, ...]]:
     encontrados["codigo"].update(m.group(0).upper() for m in _CODIGO_PROVA.finditer(texto))
     encontrados["codigo"].update(_normalizar(m.group(0)).upper().replace(" ", "_").replace("-", "_") for m in _CODIGO_EXPLICITO.finditer(texto))
     encontrados["ano"].update(re.findall(r"\b(?:19|20)\d{2}\b", texto))
-    for linha in texto.splitlines():
-        versao = re.search(r"(?i)\b(prova|tipo|t)\s*([1-4ivx]+)\b", linha)
-        if versao:
-            rotulo = versao.group(2).upper()
-            numeral = {"I": "1", "II": "2", "III": "3", "IV": "4", "V": "5", "X": "10"}.get(rotulo, rotulo)
-            encontrados["versao"].add(numeral)
+    lines = texto.splitlines()
+    for index, linha in enumerate(lines):
+        for label, version in versoes_declaradas(linha):
+            encontrados["versao"].add(version)
+        coded_role = cabecalho_codigo_cargo(linha)
+        if coded_role:
+            code, title = coded_role
+            encontrados["codigo"].add(code)
+            encontrados["cargo"].add(_normalizar(title))
+            if linha.rstrip().endswith(("-", "–", "—")) and index + 1 < len(lines):
+                continuation = lines[index + 1].strip()
+                if re.match(r"(?i)^(analista|assistente|t[eé]cnico|engenheiro|pesquisador)\b", continuation) and len(continuation) < 140:
+                    encontrados["cargo"].add(_normalizar(continuation))
         cargo = re.search(r"(?i)^\s*cargo\s*:\s*(.+?)\s*$", linha)
         if cargo and len(cargo.group(1).strip()) >= 5:
             encontrados["cargo"].add(_normalizar(cargo.group(1)))
         # Muitos cadernos e gabaritos imprimem o cargo como título, sem o rótulo.
         titulo_cargo = linha.strip()
-        if (titulo_cargo == titulo_cargo.upper() and 8 <= len(titulo_cargo) <= 140
+        if (not cargo and not coded_role and titulo_cargo == titulo_cargo.upper() and 8 <= len(titulo_cargo) <= 140
                 and re.search(r"\b(ANALISTA|AGENTE|AUDITOR|ADMINISTRADOR|ASSISTENTE|T[EÉ]CNICO|PROFESSOR|ENGENHEIRO)\b", titulo_cargo, re.I)
                 and not re.search(r"\b(PORTUGU[EÊ]S|MATEM[AÁ]TICA|INFORM[AÁ]TICA|CONHECIMENTOS|DIREITO|RACIOC[IÍ]NIO)\b", titulo_cargo, re.I)):
             encontrados["cargo"].add(_normalizar(titulo_cargo))
+            if index + 2 < len(lines):
+                specialty = lines[index + 1].strip()
+                following = lines[index + 2].strip()
+                if (specialty == specialty.upper() and 5 <= len(specialty) <= 140
+                        and re.match(r'(?i)^PROVA\s+(?:OBJETIVA\s*[-–—]\s*)?(?:TIPO\s*)?[1-4IVX]+\b', following)
+                        and not re.search(r'(?i)\b(?:quest[õo]es|instru[çc][õo]es|portugu[eê]s|prova)\b', specialty)):
+                    encontrados['cargo'].add(_normalizar(titulo_cargo + ' - ' + specialty))
         orgao = _ORGAO.search(linha)
         if orgao:
             encontrados["orgao"].add(_normalizar(linha)[:160])
@@ -150,10 +205,9 @@ def classificar_gabarito(texto: str) -> PerfilDocumento:
         versoes = []
         tipos_versao = []
         for linha in texto.splitlines():
-            m = re.search(r"(?i)\b(prova|tipo|t)\s*([1-4ivx]+)\b", linha)
-            if m:
-                tipos_versao.append(m.group(1).casefold())
-                versoes.append(m.group(2).upper())
+            for label, version in versoes_declaradas(linha):
+                tipos_versao.append(label.casefold())
+                versoes.append(version)
         if len(set(versoes)) >= 2:
             padrao = (
                 "multiprova_por_colunas"
@@ -212,6 +266,7 @@ def classificar_gabarito(texto: str) -> PerfilDocumento:
         "gabarito", padrao, tuple(evidencias), codigos,
         familia=familia, metadados=_metadados(texto), intervalo_questoes=faixa,
         quantidade_respostas=max(len(numeros), quantidade_sequencial),
+        situacao=situacao_gabarito(texto),
     )
 
 

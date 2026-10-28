@@ -240,7 +240,15 @@ def _verify_automatic_identity(manifest: dict, refs: list[EvidenciaQuestao], tex
         for ref in refs:
             source = DocumentoFonte.get_by_id(ref.documento_fonte_id)
             path = Path(source.localizacao).resolve()
-            if (ref.parte == "gabarito" and path not in allowed_answers) or (ref.parte != "gabarito" and path != book):
+            role = "gabarito" if ref.parte == "gabarito" else "caderno"
+            declared = (identity.get("equivalencia_documental") or {}).get(role)
+            allowed = allowed_answers if role == "gabarito" else {book}
+            if declared is not None:
+                from src.importador.comparacao_fontes import comparar_documentos
+                if declared.get("sha256_fonte") != source.sha256 or not any(
+                        reference.is_file() and comparar_documentos(path, reference) == declared for reference in allowed):
+                    raise ValueError("equivalencia_documental_nao_comprovada")
+            elif path not in allowed:
                 raise ValueError("fonte_diverge_do_catalogo")
         book_hash = _hash_file(book)
         expected = {"prova": entry.get("prova") or "pdf:" + book_hash,

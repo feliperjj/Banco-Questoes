@@ -1,6 +1,41 @@
 from src.importador.parser import extrair_metadados_prova, parsear_questoes
 
 
+def test_contexto_relativo_nao_contamina_alternativa_anterior_e_preserva_numeros():
+    def block(number, statement):
+        return f'{number}\n{statement}\n' + '\n'.join(f'{letter}) Opcao {letter}.' for letter in 'ABCDE') + '\n'
+    declaration = 'ATENÇÃO: O texto a seguir refere-se às duas próximas questões.\n'
+    passage = 'Um texto compartilhado completo com informação suficiente para as perguntas subsequentes.\n'
+    text = block(1, 'Primeira pergunta independente, anterior ao novo texto.') + declaration + passage
+    text += block(9, 'Segunda pergunta sobre o texto compartilhado.') + block(20, 'Terceira pergunta sobre o mesmo texto.')
+    questions = parsear_questoes(text, perfil_escolhido='multipla_escolha_numero_isolado_v2')
+    assert [q['numero'] for q in questions] == [1, 9, 20]
+    assert questions[0]['alternativas'][-1]['texto'] == 'Opcao E.'
+    assert not questions[0]['texto_apoio']
+    assert questions[1]['texto_apoio'] == questions[2]['texto_apoio'] == (declaration + passage).strip()
+
+
+def test_contexto_relativo_em_ingles_exige_todos_os_marcadores_declarados():
+    from src.importador.perfis.normalizacao import contextos_relativos
+    from src.importador.perfis.segmentacao import segmentar
+    text = 'READ TEXT I AND ANSWER NEXT THREE QUESTIONS.\nTEXT I\nComplete shared passage.\n'
+    for number in (4, 8):
+        text += f'{number}\nA sufficiently long statement for this question.\n' + '\n'.join(f'{letter}) Option {letter}.' for letter in 'ABCDE') + '\n'
+    candidates = segmentar(text, text, perfil_escolhido='multipla_escolha_numero_isolado_v2').candidatos
+    assert contextos_relativos(text, candidates) == {}
+    text = text.replace('THREE', 'TWO')
+    assert set(contextos_relativos(text, candidates)) == {4, 8}
+
+
+def test_secao_em_duas_linhas_nao_entra_na_alternativa_e_classifica_bloco_seguinte():
+    text = '1\nPrimeiro enunciado completo.\n' + '\n'.join(f'{letter}) Opcao {letter}.' for letter in 'ABCDE')
+    text += '\nLegislação Acerca de Segurança da\nInformação e Proteção de Dados\n'
+    text += '2\nSegundo enunciado completo.\n' + '\n'.join(f'{letter}) Outra opcao {letter}.' for letter in 'ABCDE')
+    questions = parsear_questoes(text)
+    assert questions[0]['alternativas'][-1]['texto'] == 'Opcao E.'
+    assert questions[1]['disciplina'] == 'Legislação Acerca de Segurança da Informação e Proteção de Dados'
+
+
 def test_parseia_marcadores_questao_nomeados():
     texto = """
 CEBRASPE Concurso publico 2026

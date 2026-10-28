@@ -151,7 +151,8 @@ def _extrair_gabaritos_ocr(
                 pagina = pdf.pages[numero_pagina]
                 texto_pagina = pagina.extract_text() or ""
                 template = selecionar_template(caminho, texto_pagina)
-                imagem = np.array(pagina.to_image(resolution=template.resolucao).original.convert("RGB"))
+                from src.importador.pdf_render import render_page_image
+                imagem = np.array(render_page_image(pagina, resolution=template.resolucao))
                 deteccoes, _ = ocr(imagem)
                 if not deteccoes:
                     continue
@@ -172,7 +173,7 @@ def _extrair_gabaritos_ocr(
                 ).extrair(linhas))
         logger.info("OCR de gabarito: %s itens reconhecidos", len(resultado))
         return resultado
-    except (ImportError, RuntimeError, PDFSyntaxError):
+    except (ImportError, RuntimeError, ValueError, OSError, PDFSyntaxError):
         logger.exception("Falha ao executar OCR do gabarito %s", caminho)
         return {}
 
