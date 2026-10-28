@@ -1,3 +1,4 @@
+from tests.ui_wait import wait_ui_jobs
 """Regressões de recursos, escopo e roteamento percorrendo fontes reais."""
 from hashlib import sha256
 from pathlib import Path
@@ -158,6 +159,7 @@ def test_recorte_visual_nativo_preserva_tabela_e_formula(tmp_path, monkeypatch):
     execution = ExecucaoProvaPage()
     execution.resize(960, 640)
     execution.iniciar(proof_id, "Tabela e formula")
+    wait_ui_jobs()
     assert not execution.lbl_imagem.pixmap().isNull()
     assert "x = 2 + 3" in execution.lbl_enunciado.toPlainText()
     execution.salvar_resposta_temp(True, result["ids"][0], "A")
@@ -308,6 +310,7 @@ def test_ui_treino_parcial_retoma_e_simulado_respeita_filtros_e_quantidade(tmp_p
     generator.tipo_input.setCurrentIndex(generator.tipo_input.findData("multipla_escolha"))
     generator.qtd_input.setValue(2)
     generator.gerar_prova()
+    wait_ui_jobs()
     random_proof = next(item for item in repo.listar_provas() if item["nome"] == "Simulado filtrado")
     assert [item["id"] for item in repo.buscar_questoes_da_prova(random_proof["id"])] == [result["ids"][0]]
     assert "apenas 1" in messages[-1]
@@ -323,6 +326,7 @@ def test_ui_treino_parcial_retoma_e_simulado_respeita_filtros_e_quantidade(tmp_p
     stack.addWidget(imported)
     stack.addWidget(execution)
     imported.fazer_prova(original)
+    wait_ui_jobs()
     assert stack.currentWidget() is execution
     assert execution.questoes and [q["numero_oficial"] for q in execution.questoes] == [1, 2]
     partial_id, attempt_id = execution.prova_id, execution.tentativa_id
@@ -336,6 +340,7 @@ def test_ui_treino_parcial_retoma_e_simulado_respeita_filtros_e_quantidade(tmp_p
     execution.timer.stop()
     resumed = ExecucaoProvaPage()
     resumed.iniciar(partial_id, "Treino parcial retomado")
+    wait_ui_jobs()
     assert resumed.tentativa_id == attempt_id
     assert resumed.idx_atual == 1 and resumed.tempo_gasto == 12
     assert resumed.respostas_memoria == {result["ids"][0]: "A"}
@@ -344,6 +349,7 @@ def test_ui_treino_parcial_retoma_e_simulado_respeita_filtros_e_quantidade(tmp_p
     assert "Acertos: 2 de 2" in messages[-1]
     random_execution = ExecucaoProvaPage()
     random_execution.iniciar(random_proof["id"], "Simulado filtrado")
+    wait_ui_jobs()
     random_execution.salvar_resposta_temp(True, result["ids"][0], "A")
     random_execution.confirmar_finalizacao()
     assert "Acertos: 1 de 1" in messages[-1]

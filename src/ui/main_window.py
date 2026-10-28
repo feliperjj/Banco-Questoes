@@ -74,7 +74,12 @@ class MainWindow(QMainWindow):
 
     def _abrir_prova_importada(self, proof_id):
         from src.models import questoes_repo as repo
-        proof = next((item for item in repo.listar_provas_cadastradas() if item["id"] == proof_id), None)
+        from src.ui.database_task import DatabaseTask
+        if not hasattr(self, "_proof_open_task"):
+            self._proof_open_task = DatabaseTask(self)
+        self._proof_open_task.submit(lambda: next((item for item in repo.listar_provas_cadastradas() if item["id"] == proof_id), None), self._prova_importada_recebida, lambda error: QMessageBox.warning(self, "Prova indisponível", error))
+
+    def _prova_importada_recebida(self, proof):
         if proof is None:
             QMessageBox.warning(self, "Prova indisponível", "O cadastro desta prova não está mais disponível.")
             return

@@ -331,3 +331,7 @@ Três famílias passaram pela interface em bancos isolados: EPAGRI/S201 (50 iten
 Dataprev tipo 4: 70 respostas conferidas no quadro da página 14; tipo 3 recusado. O gabarito é preliminar e a identidade impressa é insuficiente para certificação independente. São 70 questões para conferência e zero elegíveis, sem simulado. O código no nome do arquivo não substitui comprovação documental. Permanecem necessários gabarito definitivo e identidade verificável/revisão humana efetiva.
 
 Apoios relativos e recursos compartilhados foram preservados. Cabeçalhos/rodapés saem do corpo mantendo banca/ano documentais; números internos não sobrescrevem a disciplina de questões anteriores. O relatório de execução reúne evidências, limites e validações finais. Os três pares conhecidos e a Dataprev ajustada não comprovam generalização cega. OCR de digitalização real também não foi comprovado.
+
+### Desempenho e leitura da prova
+
+A contagem de questões e a abertura de provas mostram o carregamento sem bloquear a navegação. Mudar somente a quantidade não repete a conferência do acervo. A tela de resolução conserva o PDF em tamanho legível, com respostas ao lado em telas largas e A–E numa faixa compacta em telas menores. Veja as medições e os limites em [relatório de desempenho](docs/RELATORIO_PERFORMANCE_UI_2026-10-28.md).

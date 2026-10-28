@@ -5,10 +5,11 @@ from src.ui.components.source_facsimile import SourceFacsimile
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap, QTextBlockFormat, QTextCursor
-from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QBoxLayout, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QProgressBar, QRadioButton, QScrollArea, QSizePolicy, QTextEdit, QToolButton, QVBoxLayout, QWidget
 from shiboken6 import isValid
 
 import src.models.questoes_repo as repo
+from src.ui.database_task import DatabaseTask
 import src.models.revisao_service as revisao_svc
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ class _ExamOptionRow(QFrame):
 class ExecucaoProvaPage(QWidget):
     def __init__(self):
         super().__init__()
+        self.start_task = DatabaseTask(self)
+        self._starting = False
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(34, 28, 34, 28)
         self.layout.setSpacing(16)
@@ -37,9 +40,10 @@ class ExecucaoProvaPage(QWidget):
         header = QHBoxLayout()
         header.setSpacing(14)
         self.lbl_info = QLabel("Prova não iniciada")
+        self.lbl_info.setWordWrap(True)
+        self.lbl_info.setMinimumWidth(0)
         self.lbl_info.setObjectName("exam-info")
-        header.addWidget(self.lbl_info)
-        header.addStretch()
+        header.addWidget(self.lbl_info, 1)
         self.lbl_tempo = QLabel("00:00")
         self.lbl_tempo.setObjectName("timer-label")
         header.addWidget(self.lbl_tempo)
@@ -57,7 +61,7 @@ class ExecucaoProvaPage(QWidget):
 
         self.cartao_questao = QFrame()
         self.cartao_questao.setObjectName("exam-question-card")
-        cartao_layout = QVBoxLayout(self.cartao_questao)
+        cartao_layout = self.cartao_layout = QVBoxLayout(self.cartao_questao)
         cartao_layout.setContentsMargins(24, 22, 24, 24)
         cartao_layout.setSpacing(14)
         self.lbl_tipo_questao = QLabel("ENUNCIADO")
@@ -92,25 +96,26 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_imagem.hide()
         enunciado_layout.addWidget(self.lbl_imagem)
         self.original_view = SourceFacsimile()
-        self.original_view.setMaximumHeight(360)
+        self.original_view.setMinimumHeight(120)
         self.original_view.hide()
-        enunciado_layout.addWidget(self.original_view)
+        enunciado_layout.addWidget(self.original_view, 1)
         self.original_context_button = QToolButton()
-        self.original_context_button.setText("Texto de apoio original")
+        self.original_context_button.setText("Ler texto de apoio")
         self.original_context_button.setCheckable(True)
         self.original_context_button.hide()
         enunciado_layout.addWidget(self.original_context_button)
-        self.original_context_view = SourceFacsimile()
-        self.original_context_view.setMaximumHeight(260)
-        self.original_context_view.hide()
-        self.original_context_button.toggled.connect(self.original_context_view.setVisible)
-        enunciado_layout.addWidget(self.original_context_view)
-        cartao_layout.addWidget(self.bloco_enunciado)
+        self._original_assets = []
+        self._original_context_assets = []
+        self.original_context_button.toggled.connect(self._alternar_original_contexto)
+        self.body_layout = QBoxLayout(QBoxLayout.TopToBottom)
+        self.body_layout.setSpacing(20)
+        self.body_layout.addWidget(self.bloco_enunciado, 1)
+        cartao_layout.addLayout(self.body_layout, 1)
         self.alternativas_frame = QFrame()
         self.alternativas_frame.setObjectName("exam-options-card")
         self.alternativas_frame.setMinimumWidth(0)
         self.alternativas_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.alternativas_layout = QVBoxLayout(self.alternativas_frame)
+        self.alternativas_layout = QBoxLayout(QBoxLayout.TopToBottom, self.alternativas_frame)
         self.alternativas_layout.setContentsMargins(12, 10, 12, 10)
         self.alternativas_layout.setSpacing(8)
         self.grupo_botoes = QButtonGroup(self)
@@ -127,10 +132,11 @@ class ExecucaoProvaPage(QWidget):
         self._scroll_timer = QTimer(self)
         self._scroll_timer.setSingleShot(True)
         self._scroll_timer.timeout.connect(self._reiniciar_rolagem)
-        cartao_layout.addWidget(self.alternativas_scroll)
+        self.body_layout.addWidget(self.alternativas_scroll)
+        self.body_layout.setAlignment(self.alternativas_scroll, Qt.AlignTop)
         # O espaço livre deve ficar abaixo das alternativas, sem afastá-las
         # do enunciado quando a janela é alta.
-        cartao_layout.addStretch(1)
+        self._original_mc = False
         self.layout.addWidget(self.cartao_questao, 1)
 
         nav = QHBoxLayout()
@@ -160,6 +166,12 @@ class ExecucaoProvaPage(QWidget):
         self.tempo_limite_seg = 0
         self.em_andamento = False
         self._mostrar_estado_inicial()
+
+    def _alternar_original_contexto(self, expanded):
+        assets = self._original_context_assets if expanded else self._original_assets
+        self.original_view.set_assets(assets)
+        self.lbl_enunciado_titulo.setText('TEXTO DE APOIO' if expanded else 'QUESTÃO')
+        self.original_context_button.setText('Voltar à questão' if expanded else 'Ler texto de apoio')
 
     def _adicionar_secao_contexto(self, parent_layout, field_name, title):
         section = QFrame()
@@ -218,6 +230,9 @@ class ExecucaoProvaPage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if self._starting:
+            self.lbl_info.setText('Carregando a prova…')
+            return
         # Ao voltar para esta aba depois de finalizar, nunca reutilize o
         # enunciado/alternativas da tentativa anterior.
         if not self.em_andamento:
@@ -228,7 +243,6 @@ class ExecucaoProvaPage(QWidget):
     def _mostrar_estado_inicial(self):
         self.timer.stop()
         self.original_view.hide()
-        self.original_context_view.hide()
         self.original_context_button.hide()
         self.original_context_button.setChecked(False)
         self.lbl_enunciado.show()
@@ -251,25 +265,33 @@ class ExecucaoProvaPage(QWidget):
         if self.em_andamento:
             QMessageBox.information(self, "Prova em andamento", "Finalize a prova atual antes de iniciar outra.")
             return
-        self.prova_id = prova_id
-        self.questoes = repo.buscar_questoes_da_prova(prova_id)
-        if not self.questoes:
-            QMessageBox.critical(self, "Erro", "Esta prova não possui questões.")
+        if self._starting:
             return
-        legadas = sum(bool(q.get("snapshot_legado_desconhecido")) for q in self.questoes)
+        self._starting = True
+        self.lbl_info.setText('Carregando a prova…')
+        self.btn_finalizar.setEnabled(False)
+        def carregar():
+            questoes = repo.buscar_questoes_da_prova(prova_id)
+            if not questoes:
+                raise ValueError('Esta prova não possui questões.')
+            tentativa = repo.iniciar_tentativa(prova_id)
+            return prova_id, nome_prova, questoes, tentativa, repo.obter_prova(prova_id) or {}, repo.obter_progresso(tentativa)
+        self.start_task.submit(carregar, self._inicio_pronto, self._erro_inicio)
+
+    def _erro_inicio(self, message):
+        self._starting = False
+        self._mostrar_estado_inicial()
+        QMessageBox.warning(self, 'Prova indisponível', message)
+
+    def _inicio_pronto(self, result):
+        self.prova_id, nome_prova, self.questoes, self.tentativa_id, configuracao, progresso = result
+        self._starting = False
+        legadas = sum(bool(q.get('snapshot_legado_desconhecido')) for q in self.questoes)
         if legadas:
-            QMessageBox.warning(
-                self,
-                "Versão histórica desconhecida",
-                f"{legadas} questão(ões) desta prova não possuem snapshot da versão realmente usada. "
-                "O conteúdo atual pode não ser o da tentativa original. A tentativa aberta será preservada; "
-                "o sistema não finalizará o resultado usando uma versão presumida.",
-            )
-        self.tentativa_id = repo.iniciar_tentativa(prova_id)
-        configuracao = repo.obter_prova(prova_id) or {}
-        self.tempo_limite_seg = max(0, int(configuracao.get("tempo_limite_min") or 0)) * 60
-        self.lbl_info.setText(f"{nome_prova}  ·  {len(self.questoes)} questões")
-        progresso = repo.obter_progresso(self.tentativa_id)
+            QMessageBox.warning(self, 'Versão histórica desconhecida',
+                f'{legadas} questão(ões) não possuem snapshot da versão usada. A tentativa será preservada sem presumir o conteúdo histórico.')
+        self.tempo_limite_seg = max(0, int(configuracao.get('tempo_limite_min') or 0)) * 60
+        self.lbl_info.setText(f'{nome_prova}  ·  {len(self.questoes)} questões')
         self.idx_atual = min(progresso["indice"], len(self.questoes) - 1)
         self.respostas_memoria = progresso["respostas"]
         self.tempo_gasto = progresso["tempo_seg"]
@@ -279,7 +301,7 @@ class ExecucaoProvaPage(QWidget):
         self.timer.start(1000)
         self.btn_finalizar.setEnabled(True)
         self.mostrar_questao_atual()
-        logger.info("Tentativa %s iniciada para prova %s", self.tentativa_id, prova_id)
+        logger.info("Tentativa %s iniciada para prova %s", self.tentativa_id, self.prova_id)
 
     def atualizar_tempo(self):
         self.tempo_gasto += 1
@@ -329,18 +351,19 @@ class ExecucaoProvaPage(QWidget):
         self.original_view.setVisible(original)
         self.lbl_enunciado.setVisible(not original)
         self.original_context_button.setChecked(False)
-        self.original_context_view.hide()
         self.original_context_button.setVisible(bool(original and presentation.get("contexto")))
         if original:
             self.lbl_imagem.hide()
             self.original_view.set_assets(presentation["questao"])
-            self.original_context_view.set_assets(presentation.get("contexto", []))
+            self._original_assets = presentation['questao']
+            self._original_context_assets = presentation.get('contexto', [])
             self._context_sections["texto_apoio"][0].hide()
-            self.lbl_tipo_questao.setText("ORIGINAL · VERIFICAÇÃO AUTOMÁTICA")
+            self.lbl_tipo_questao.setText("QUESTÃO ORIGINAL")
+        self._original_mc = bool(original and q['tipo'] == 'multipla_escolha')
         self.limpar_alternativas()
         opcoes = [(a["letra"], f"{a['letra']})  {a['texto']}") for a in q.get("alternativas", [])] if q["tipo"] == "multipla_escolha" else [("Certo", "Certo"), ("Errado", "Errado")]
         if original and q["tipo"] == "multipla_escolha":
-            opcoes = [(value, f"Marcar alternativa {value}") for value, _ in opcoes]
+            opcoes = [(value, f"Alternativa {value}") for value, _ in opcoes]
         if not opcoes:
             opcoes = [(letra, letra) for letra in "ABCDE"]
         for valor, rotulo in opcoes:
@@ -354,9 +377,12 @@ class ExecucaoProvaPage(QWidget):
             option_layout.setSpacing(10)
             rb = QRadioButton()
             rb.setObjectName("exam-option-toggle")
+            rb.setFixedWidth(22)
+            rb.setMinimumHeight(18)
             rb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             label = QLabel(rotulo)
             label.setObjectName("exam-option-label")
+            label.setProperty('option_value', valor)
             label.setWordWrap(True)
             label.setTextFormat(Qt.PlainText)
             label.setMinimumWidth(0)
@@ -432,9 +458,10 @@ class ExecucaoProvaPage(QWidget):
             linha.setFixedHeight(altura)
             alturas_linhas.append(altura)
 
+        horizontal = self.alternativas_layout.direction() == QBoxLayout.LeftToRight
         altura_conteudo = (
-            sum(alturas_linhas)
-            + espacamento * max(0, len(alturas_linhas) - 1)
+            (max(alturas_linhas, default=0) if horizontal else sum(alturas_linhas))
+            + (0 if horizontal else espacamento * max(0, len(alturas_linhas) - 1))
             + margens.top()
             + margens.bottom()
             + 8  # borda do cartão e área interna do scroll
@@ -450,6 +477,25 @@ class ExecucaoProvaPage(QWidget):
         # pode ser descartada antes desse callback, então ignore widgets já destruídos.
         if not isValid(self):
             return
+        margin = 16 if self.width() < 850 else 28
+        self.layout.setContentsMargins(20 if self.width() < 850 else 34, margin,
+                                       20 if self.width() < 850 else 34, margin)
+        if self.width() < 850:
+            self.cartao_layout.setContentsMargins(16, 14, 16, 16)
+        else:
+            self.cartao_layout.setContentsMargins(24, 22, 24, 24)
+        side_by_side = self._original_mc and self.width() >= 1080
+        self.body_layout.setDirection(QBoxLayout.LeftToRight if side_by_side else QBoxLayout.TopToBottom)
+        self.alternativas_layout.setDirection(QBoxLayout.LeftToRight if self._original_mc and not side_by_side else QBoxLayout.TopToBottom)
+        self.alternativas_scroll.setMinimumWidth(230 if side_by_side else 0)
+        self.alternativas_scroll.setMaximumWidth(280 if side_by_side else 16777215)
+        if self._original_mc:
+            for index in range(self.alternativas_layout.count()):
+                row = self.alternativas_layout.itemAt(index).widget()
+                if row is not None:
+                    label = row.layout().itemAt(1).widget()
+                    value = label.property('option_value')
+                    label.setText(f'Alternativa {value}' if side_by_side else value)
         self._ajustar_altura_texto(self.lbl_enunciado, 66, 360)
         for section, _, editor in self._context_sections.values():
             if section.isVisible() and editor.isVisible():

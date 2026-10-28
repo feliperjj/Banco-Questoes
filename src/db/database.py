@@ -117,6 +117,13 @@ def init_db(db_path=None):
         return db
     os.makedirs(os.path.dirname(str(db_path)) or ".", exist_ok=True)
     db.connect(reuse_if_open=True)
+    connection = db.connection()
+    schema_cookie = db.execute_sql('PRAGMA schema_version').fetchone()[0]
+    if (getattr(db._state, 'checked_connection', None) is connection
+            and getattr(db._state, 'checked_schema', None) == schema_cookie):
+        version = db.execute_sql('SELECT version FROM schema_version LIMIT 1').fetchone()
+        if version and version[0] == CURRENT_SCHEMA_VERSION:
+            return db
     if banco_existente and _needs_structural_backup(str(db_path)):
         # Backup validado antes de create_tables/ALTER TABLE. Se falhar, a
         # aplicação interrompe a inicialização antes de modificar o banco.
@@ -132,6 +139,8 @@ def init_db(db_path=None):
         apply_migrations(db, banco_existente=banco_existente)
         for sql in deferred_indexes:
             db.execute_sql(sql)
+    db._state.checked_connection = connection
+    db._state.checked_schema = db.execute_sql('PRAGMA schema_version').fetchone()[0]
     return db
 
 

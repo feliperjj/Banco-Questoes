@@ -1,3 +1,4 @@
+from tests.ui_wait import wait_ui_jobs
 from src.db.database import init_db
 from src.models import questoes_repo as repo
 from src.importador.parser import parsear_questoes
@@ -75,6 +76,7 @@ def test_navegacao_reinicia_scroll_e_restabelece_selecao(tmp_path, qt_applicatio
     page.resize(760,640)
     page.show()
     page.iniciar(pid,'Rolagem')
+    wait_ui_jobs()
     # Aguarda o layout calculado, sem depender da velocidade da máquina.
     for _ in range(100):
         QTest.qWait(20)

@@ -1,3 +1,4 @@
+from tests.ui_wait import wait_ui_jobs
 from pathlib import Path
 import json
 from threading import Event
@@ -361,11 +362,16 @@ def test_ui_importa_pdfs_externos_do_arquivo_a_tentativa(tmp_path, monkeypatch):
     def start_original():
         dialog = QApplication.activeModalWidget()
         if dialog and hasattr(dialog, "start"):
+            start_timer.stop()
             dialog.start.click()
         elif dialog:
             dialog.reject()
-    QTimer.singleShot(0, start_original)
+    start_timer = QTimer()
+    start_timer.timeout.connect(start_original)
+    start_timer.start(10)
     page.btn_abrir_prova.click()
+    wait_ui_jobs()
+    start_timer.stop()
     execution = window.pages.widget(5)
     assert window.pages.currentWidget() is execution
     original_id, original_attempt = execution.prova_id, execution.tentativa_id

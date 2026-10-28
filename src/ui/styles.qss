@@ -176,6 +176,8 @@ QFrame#exam-option { min-height: 48px; }
 QFrame#exam-option:hover { border-color: #8db9a8; background: #edf5ef; }
 QFrame#exam-option[selected="true"] { border: 2px solid #197565; background: #e8f3ec; }
 QRadioButton#exam-option-toggle { background: transparent; border: none; padding: 0; }
+QRadioButton#exam-option-toggle::indicator { width: 14px; height: 14px; border: 1px solid #799c90; border-radius: 8px; background: white; }
+QRadioButton#exam-option-toggle::indicator:checked { background: #197565; border-color: #197565; }
 QLabel#exam-option-label { background: transparent; color: #365149; font-size: 14px; padding: 4px 0; }
 QRadioButton#exam-option:hover, QRadioButton#review-option:hover { border-color: #8db9a8; background: #edf5ef; }
 QRadioButton#exam-option:checked, QRadioButton#review-option:checked { border: 2px solid #197565; background: #e8f3ec; color: #165d4c; }
