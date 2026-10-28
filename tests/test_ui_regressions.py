@@ -1,3 +1,4 @@
+from tests.ui_wait import wait_ui_jobs
 import os
 from pathlib import Path
 
@@ -35,6 +36,7 @@ def test_execucao_limpa_estado_apos_finalizar_prova(tmp_path, monkeypatch):
     pagina = ExecucaoProvaPage()
     stack.addWidget(pagina)
     pagina.iniciar(prova_id, "Ciclo de regressão")
+    wait_ui_jobs()
     pagina.respostas_memoria = {q1: "Certo"}
     monkeypatch.setattr(execucao_mod.QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
     monkeypatch.setattr(execucao_mod.QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
@@ -176,6 +178,7 @@ def test_execucao_finaliza_automaticamente_ao_atingir_limite(tmp_path, monkeypat
     monkeypatch.setattr(execucao_mod.QMessageBox, "information", lambda *args, **kwargs: QMessageBox.Ok)
 
     pagina.iniciar(prova_id, "Limite")
+    wait_ui_jobs()
     pagina.tempo_limite_seg = 1
     pagina.atualizar_tempo()
 

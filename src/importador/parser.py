@@ -24,6 +24,7 @@ _DISCIPLINAS = (
     ("Língua Portuguesa", r"l(?:í|i|�)ngua portuguesa"),
     ("Língua Portuguesa", r"portugu(?:ê|e|�)s(?:a)?"),
     ("Matemática", r"matem(?:á|a|�)tica"),
+    ("Matemática e Raciocínio Lógico", r"matem[áa]tica e racioc[íi]nio l[óo]gico"),
     ("Língua Inglesa", r"l(?:í|i|�)ngua inglesa"),
     ("Conhecimentos Básicos", r"conhecimentos b(?:á|a|�)sicos(?:\s+(?:gerais|espec(?:í|i|�)ficos))?"),
     ("Conhecimentos Gerais", r"conhecimentos gerais"),
@@ -33,7 +34,10 @@ _DISCIPLINAS = (
     ("Direito Constitucional", r"direito constitucional"),
     ("Direito Administrativo", r"direito administrativo"),
     ("Raciocínio Lógico", r"racioc(?:í|i|�)nio l(?:ó|o|�)gico"),
-    ("Raciocínio Lógico e Matemática", r"racioc(?:í|i|�)nio l(?:ó|o|�)gico e matem(?:á|a|�)tica"),
+    ("Raciocínio Lógico e Matemática", r"racioc(?:í|i|�)nio l(?:ó|o|�)gico e matem(?:á|a|�)tic[ao]"),
+    ("Raciocínio Lógico e Matemática", r"racioc[íi]nio l[óo]gico[- ]matem[áa]tic[ao]"),
+    ("Atualidades e Inteligência Artificial", r"atualidades e intelig[êe]ncia artificial"),
+    ("Legislação Acerca de Segurança da Informação e Proteção de Dados", r"legisla[çc][aã]o acerca de seguran[çc]a da informa[çc][aã]o e prote[çc][aã]o de dados"),
     ("Contabilidade", r"contabilidade"),
     ("Administração", r"administra(?:ç|c|�)(?:ão|ao|�o)"),
     ("Auditoria", r"auditoria"),
@@ -268,12 +272,12 @@ def extrair_metadados_prova(texto: str, origem: str = "") -> dict:
         if marcador:
             numero_pendente = int(marcador.group(1))
             continue
-        marcador_inicio = _MARCADOR_QUESTAO.match(linha)
+        marcador_inicio = _MARCADOR_QUESTAO.match(linha + '\n')
         if marcador_inicio and disciplina_atual and not _parece_grade_respostas(linha):
-            disciplinas[int(marcador_inicio.group(1))] = disciplina_atual
+            disciplinas.setdefault(int(marcador_inicio.group(1)), disciplina_atual)
             continue
         if numero_pendente is not None and disciplina_atual:
-            disciplinas[numero_pendente] = disciplina_atual
+            disciplinas.setdefault(numero_pendente, disciplina_atual)
             numero_pendente = None
 
     # Alguns cadernos não repetem o nome da disciplina antes de cada bloco;
@@ -292,8 +296,9 @@ def extrair_metadados_prova(texto: str, origem: str = "") -> dict:
 
 
 
-def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
+def parsear_questoes(texto: str, origem: str = "", *, perfil_escolhido: str | None = None) -> list[dict]:
     avisos_extracao = list(getattr(texto, "avisos", ()))
+    metadados_fonte = getattr(texto, 'metadados_fonte', {})
     perfil_extracao = getattr(texto, "perfil", "texto")
     from src.importador.perfis.normalizacao import normalizar_formatos, contextos_explicitos, textos_rotulados
     texto = _normalizar_texto(normalizar_formatos(texto))
@@ -306,12 +311,18 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
     texto_original = texto
     texto = _quebrar_marcadores_inline(texto)
     metadados = extrair_metadados_prova(texto, origem)
+    for field in ('banca', 'ano'):
+        if not metadados[field] and metadados_fonte.get(field):
+            metadados[field] = metadados_fonte[field]
     texto_questoes = _remover_front_matter(texto)
     quantidade_declarada = _quantidade_de_questoes(texto)
 
     from src.importador.perfis.segmentacao import segmentar
-    resultado = segmentar(texto_questoes, _remover_front_matter(texto_original), metadados["banca"])
+    resultado = segmentar(texto_questoes, _remover_front_matter(texto_original), metadados["banca"],
+                          perfil_escolhido=perfil_escolhido)
     candidatos = resultado.candidatos
+    from .perfis.normalizacao import contextos_relativos, CONTEXTO_RELATIVO
+    contextos.update(contextos_relativos(texto_questoes, candidatos))
     tem_alternativas = resultado.tem_alternativas
     contexto_inicial = ""
     if candidatos:
@@ -362,6 +373,21 @@ def parsear_questoes(texto: str, origem: str = "") -> list[dict]:
         bloco = re.split(r"(?m)^[ \t]*JUSTIFICATIVA(?:[ \t]*[-–:]|[ \t]*$)", bloco, maxsplit=1, flags=re.IGNORECASE)[0].strip()
         apoio_seguinte = re.search(r'(?im)^(?:Texto[ \t]+[A-Z0-9]+[ \t]*\n|[^\n]*(?:texto|enunciado|informa[çc][õo]es)[^\n]*quest(?:ões|oes)(?:\s+de)?(?:\s+n[úu]meros)?\s+\d+\s+(?:a|até|e)\s+\d+[^\n]*\n)', bloco)
         primeira_alternativa = _INICIO_ALTERNATIVA.search(bloco)
+        relative = CONTEXTO_RELATIVO.search(bloco)
+        if relative and primeira_alternativa and relative.start() > primeira_alternativa.start():
+            bloco = bloco[:relative.start()].rstrip()
+        if primeira_alternativa:
+            lines = list(re.finditer(r'(?m)^[^\n]+$', bloco))
+            if len(lines) >= 2:
+                last = lines[-1]
+                credit = numero_questao == len(candidatos) and re.match(r'(?i)^(?:Realiza[çc][aã]o|Instituto\s+|Banca\s+)', last.group().strip())
+                if last.start() > primeira_alternativa.start() and (_disciplina_da_linha(last.group()) or credit) and re.search(r'[.!?%][”"\']?\s*$', lines[-2].group()):
+                    bloco = bloco[:last.start()].rstrip()
+        if primeira_alternativa:
+            for heading in re.finditer(r"(?m)^[^\n]+\|\s*\d+\s*quest[^\n]*$", bloco):
+                if heading.start() > primeira_alternativa.start() and _disciplina_da_linha(heading.group()):
+                    bloco = bloco[:heading.start()].rstrip()
+                    break
         if apoio_seguinte and primeira_alternativa and apoio_seguinte.start() > primeira_alternativa.start():
             bloco = bloco[:apoio_seguinte.start()].rstrip()
         partes = _partes_alternativas(bloco)

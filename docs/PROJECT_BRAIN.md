@@ -12,6 +12,9 @@ Este arquivo é a referência operacional antes de qualquer alteração. Ele reg
 | Parser | texto | `src/importador/parser.py` | dicionários de questões |
 | Catálogo | caminho + cargo/prova | `config/gabaritos.json` | associação rastreável de gabarito |
 | Diagnóstico | samples + catálogo | `src/importador/diagnostico.py` | cobertura por caderno |
+| Reconhecimento documental | PDF + estrutura | `src/importador/perfis/documentos.py`, `perfis/registro.py` | perfis e evidências por documento |
+| Associação documental | caderno + gabarito + escopo | `src/importador/associacao_documental.py` | correspondência, ambiguidade ou pendências |
+| Certificação de importação | conteúdo + gabarito + regiões | `src/importador/lote_verificado.py` | questões elegíveis ou pendentes |
 | Lote | questões + tokens | `src/importador/lote.py` | gabaritos/classificação aplicados |
 | Persistência | dicionários | `src/models/questoes_repo.py` | questões, provas, tentativas |
 | UI | páginas PySide6 | `src/ui/main_window.py` | navegação e interação |
@@ -21,8 +24,24 @@ Fluxo de importação:
 
 ```text
 arquivo -> extrair_texto -> parsear_questoes -> revisar/aplicar gabarito
-        -> classificar -> criar_questoes_em_lote -> SQLite
+        -> associar documentos -> revisar -> salvar lote verificado -> SQLite
 ```
+
+O salvamento não libera uma questão por si só: a certificação depende de
+evidência física e de escopo suficiente. A implementação dos dois funis está
+parcial e os limites medidos estão no relatório
+[`RELATORIO_DOIS_FUNIS_ESPECIALIZADOS_LUNA.md`](RELATORIO_DOIS_FUNIS_ESPECIALIZADOS_LUNA.md).
+
+A tela oferece as opções documentais de cargo/código/versão e correção de
+leitura por página. Seleção incompatível não aprova respostas. Documentos sem
+questões mantêm diagnóstico e rascunho recuperável. Os atalhos após salvar
+abrem a prévia da prova/treino parcial ou o gerador; os totais de liberação são
+reconciliados com `assess_version`. Renderização de recursos e páginas OCR usa
+processo isolado reutilizado durante o lote. Rollback preserva recursos de
+importações anteriores e remove somente os arquivos novos da operação.
+Reimportação de lote parcial reconhece os hashes e o escopo antes de reutilizar
+IDs; rejeição humana não gera versão nova por repetição. Legado sem identidade
+suficiente exige conferência e não é fundido nem duplicado automaticamente.
 
 Fluxo de prova:
 
@@ -263,8 +282,10 @@ O segundo comando é destrutivo para o banco local. Só deve ser executado após
 - As etapas Arquivo/Gabarito/Revisão têm rodapé fixo. O editor rola internamente.
 - `BackgroundTask` executa uma leitura por vez e espera a limpeza nativa da
   thread antes de liberar referências Python, necessário no Windows.
-- Fechar durante a leitura é bloqueado; descartar revisão não salva exige
-  confirmação. Rascunhos de importação não sobrevivem ao encerramento do processo.
+- A leitura pode ser cancelada cooperativamente; a etapa atual termina antes de
+  descartar o resultado e o cancelamento da gravação reverte a transação. O
+  rascunho da importação persiste a etapa e os hashes das fontes, detectando
+  arquivos ausentes ou alterados ao retomar.
 - Falhas de leitura preservam o lote anterior; falhas de gravação permitem retry.
 - `tests/test_ui_reforma.py` cobre navegação, persistência, falhas e ciclo da thread.
   `scripts/verificar_ui_reforma.py` gera capturas isoladas do banco real em duas
@@ -372,4 +393,29 @@ banco local.
 - A apresentação usa recortes do PDF, preservando fórmulas, destaques e tabelas. O texto de apoio é separado e pode ter várias regiões. PDFs e PNGs são vinculados por SHA-256; o renderizador trabalha em processo isolado e reutiliza páginas somente dentro do lote.
 - Texto digital com sobreimpressão ou marca d'água pode ser normalizado para comparação; os pixels exibidos continuam sendo os originais. A cobertura de liberação não representa probabilidade estatística de acerto.
 - A Transpetro foi reparada, incluindo contexto em inglês, fórmula da Q41 e a imagem correta da Q68; sua banca é CESGRANRIO segundo a capa. Provas sem gabarito físico, preliminares, anuladas e itens que não passaram nas verificações continuam com motivos explícitos.
-- Nenhum commit, push ou pull request foi realizado; nunca abrir PR nesta tarefa.
+- Até o fechamento da validação não havia commit/push. O usuário autorizou posteriormente commit e push da entrega; nunca abrir PR nesta tarefa.
+## Continuação real de 28/10: par EPAGRI/S201
+
+- PDFs originais em Downloads usados como fontes somente leitura. Jornada na
+  janela principal em banco isolado: 50 itens e respostas, 46 elegíveis, anulações
+  16/18/19/36 bloqueadas. Treino parcial com retomada e aleatória: 46/46 em ambos.
+- Leitor físico `perfis/pdf_caixas.py`: caixas de seleção, cabeçalhos repetidos
+  removidos antes das colunas, encerramento na redação; recursos preservados nos
+  fac-símiles. Limites geométricos não confundem valores internos com marcadores.
+- T11/T12 são códigos de cargo. Escopo do gabarito vem do próprio documento,
+  independentemente do extrator textual de cadernos; cargos homônimos exigem código.
+- `comparacao_fontes.py` comprova cópias por hash ou texto e pixels de todas as
+  páginas. A autoridade recompõe a prova de equivalência antes da certificação;
+  o caminho não substitui identidade impressa para pares novos desconhecidos.
+- A prévia conserva o aviso de treino parcial ao navegar. Widgets de recortes e
+  alternativas anteriores são ocultados antes da exclusão adiada.
+- Esse caso é real, mas já pertence ao conteúdo conhecido da coleção. O relatório
+  agora registra as três famílias reais; generalização cega permanece sem comprovação.
+
+## Fechamento real dos dois funis — 28/10
+
+Três famílias passaram pela interface em bancos isolados: EPAGRI/S201 (50 itens/46 elegíveis), Morungaba com rótulos QUESTÃO (40/38) e EMBRAPA/Sistemas C/E com texto compartilhado (100/94). Os itens restantes são anulados. Composições completas preservadas; treinos parciais com retomada e simulados aleatórios concluídos com 46/46, 38/38 e 94/94.
+
+Dataprev tipo 4: 70 respostas conferidas no quadro da página 14; tipo 3 recusado. O gabarito é preliminar e a identidade impressa é insuficiente para certificação independente. São 70 questões para conferência e zero elegíveis, sem simulado. O código no nome do arquivo não substitui comprovação documental. Permanecem necessários gabarito definitivo e identidade verificável/revisão humana efetiva.
+
+Apoios relativos e recursos compartilhados foram preservados. Cabeçalhos/rodapés saem do corpo mantendo banca/ano documentais; números internos não sobrescrevem a disciplina de questões anteriores. O relatório de execução reúne evidências, limites e validações finais. Os três pares conhecidos e a Dataprev ajustada não comprovam generalização cega. OCR de digitalização real também não foi comprovado.

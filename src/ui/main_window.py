@@ -1,3 +1,4 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget, QVBoxLayout, QWidget, QSizePolicy, QMessageBox
 
 from src.ui.pages.dashboard import DashboardPage
@@ -37,6 +38,8 @@ class MainWindow(QMainWindow):
         sidebar_layout.addSpacing(22)
         self.menu = QListWidget()
         self.menu.setObjectName("main-menu")
+        self.menu.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.menu.setTextElideMode(Qt.ElideRight)
         sidebar_layout.addWidget(self.menu)
         footer = QLabel("LOCAL · SEUS DADOS")
         footer.setObjectName("sidebar-footer")
@@ -60,6 +63,8 @@ class MainWindow(QMainWindow):
             widget.setMinimumSize(0, 0)
             self.menu.addItem(nome)
             self.pages.addWidget(widget)
+        paginas["Importar"].abrir_gerador.connect(lambda: self.menu.setCurrentRow(3))
+        paginas["Importar"].abrir_prova.connect(self._abrir_prova_importada)
         self.menu.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.pages.currentChanged.connect(self.menu.setCurrentRow)
         self.menu.setCurrentRow(0)
@@ -67,15 +72,30 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.pages)
         self.setCentralWidget(main_widget)
 
+    def _abrir_prova_importada(self, proof_id):
+        from src.models import questoes_repo as repo
+        from src.ui.database_task import DatabaseTask
+        if not hasattr(self, "_proof_open_task"):
+            self._proof_open_task = DatabaseTask(self)
+        self._proof_open_task.submit(lambda: next((item for item in repo.listar_provas_cadastradas() if item["id"] == proof_id), None), self._prova_importada_recebida, lambda error: QMessageBox.warning(self, "Prova indisponível", error))
+
+    def _prova_importada_recebida(self, proof):
+        if proof is None:
+            QMessageBox.warning(self, "Prova indisponível", "O cadastro desta prova não está mais disponível.")
+            return
+        self.menu.setCurrentRow(4)
+        self.pages.widget(4).ver_questoes(proof)
+
     def closeEvent(self, event):
         importacao = self.pages.widget(2)
         if importacao.ocupada:
             QMessageBox.information(self, "Leitura em andamento", "Aguarde o término da leitura antes de fechar o aplicativo.")
             event.ignore()
             return
-        if importacao.session.pendentes and QMessageBox.question(self, "Fechar sem salvar o lote?",
-                "Há questões em revisão que ainda não foram salvas. Deseja fechar e descartar esses rascunhos?",
-                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-            event.ignore()
-            return
+        if (importacao.session.pendentes or importacao.session.caminho and not importacao.session.questoes) and not importacao._salvar_rascunho():
+            if QMessageBox.question(self, "Rascunho não salvo",
+                    "Não foi possível salvar o rascunho. Fechar e descartar a revisão atual?",
+                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                event.ignore()
+                return
         super().closeEvent(event)

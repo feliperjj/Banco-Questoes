@@ -48,6 +48,8 @@ def tmp_path(request):
 @pytest.fixture(autouse=True)
 def limpar_widgets(qt_application):
     yield
+    from src.ui.database_task import wait_for_database_jobs
+    wait_for_database_jobs()
     for widget in qt_application.topLevelWidgets():
         widget.hide()
         widget.deleteLater()

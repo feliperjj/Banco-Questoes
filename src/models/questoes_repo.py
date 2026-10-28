@@ -22,6 +22,7 @@ from src.db.models import (
     QuestaoVersao,
     DocumentoFonte,
 )
+from src.models import eligibility_read as read_batch
 from src.importador.validacao import gabarito_valido, normalizar_gabarito, problemas_estrutura
 from src.models.provenance_service import assess_version, create_question_version, create_source, register_extraction, version_is_eligible
 
@@ -42,6 +43,15 @@ def _verificar_fontes_em_lote(function):
             return function(*args, **kwargs)
         finally:
             end_source_verification_batch(token)
+    return wrapped
+
+
+def _elegibilidade_precarregada(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        init_db()
+        with read_batch.eligibility_read():
+            return function(*args, **kwargs)
     return wrapped
 
 
@@ -111,6 +121,9 @@ def _criar_questao_sem_transacao(dados: dict, source_id: int | None = None, extr
 
 
 def _ultima_versao_questao(questao_id: int):
+    cached = read_batch.latest(questao_id)
+    if cached is not None:
+        return cached
     return (QuestaoVersao.select()
             .where(QuestaoVersao.questao == questao_id)
             .order_by(QuestaoVersao.numero_versao.desc()).first())
@@ -291,6 +304,7 @@ def _questoes_elegiveis(filtros=None):
 
 
 @_verificar_fontes_em_lote
+@_elegibilidade_precarregada
 def contar_questoes_elegiveis(filtros=None):
     init_db()
     return _questoes_elegiveis(filtros).count()
@@ -377,6 +391,7 @@ def criar_prova_cadastrada(
 
 
 @_verificar_fontes_em_lote
+@_elegibilidade_precarregada
 def listar_provas_cadastradas() -> list[dict]:
     """Lista provas de origem e indica se já podem gerar uma nova prova."""
     init_db()
@@ -436,6 +451,7 @@ def listar_provas_cadastradas() -> list[dict]:
 
 
 @_verificar_fontes_em_lote
+@_elegibilidade_precarregada
 def listar_lotes_importados_sem_prova() -> list[dict]:
     """Recupera lotes antigos de importação que ainda não tinham vínculo de prova.
 
@@ -836,6 +852,7 @@ def obter_prova(prova_id: int) -> dict | None:
     return {"id": prova.id, "nome": prova.nome, "tempo_limite_min": _tempo_limite_da_configuracao(configuracao)}
 
 
+@_verificar_fontes_em_lote
 def iniciar_tentativa(prova_id: int) -> int:
     init_db()
     prova = Prova.get_or_none(Prova.id == prova_id)

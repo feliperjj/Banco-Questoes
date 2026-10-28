@@ -1,6 +1,6 @@
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSizePolicy,
@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 import src.models.questoes_repo as repo
+from src.ui.database_task import DatabaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,13 @@ logger = logging.getLogger(__name__)
 class GeradorProvaPage(QWidget):
     def __init__(self):
         super().__init__()
+        self.availability_task = DatabaseTask(self)
+        self.generation_task = DatabaseTask(self)
+        self._available = None
+        self._availability_timer = QTimer(self)
+        self._availability_timer.setSingleShot(True)
+        self._availability_timer.setInterval(180)
+        self._availability_timer.timeout.connect(self._consultar_disponibilidade)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(30, 26, 30, 26)
         layout.setSpacing(16)
@@ -88,7 +96,7 @@ class GeradorProvaPage(QWidget):
         self.lbl_disponiveis.setObjectName("generator-availability")
         form.addWidget(self.lbl_disponiveis, 5, 0, 1, 3)
 
-        gerar_btn = QPushButton("Gerar prova")
+        gerar_btn = self.gerar_btn = QPushButton("Gerar prova")
         gerar_btn.setObjectName("primary-action")
         gerar_btn.setCursor(Qt.PointingHandCursor)
         gerar_btn.setMinimumWidth(150)
@@ -132,9 +140,9 @@ class GeradorProvaPage(QWidget):
         self.banca_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.topico_input.currentTextChanged.connect(self._atualizar_disponibilidade)
         self.tipo_input.currentIndexChanged.connect(self._atualizar_disponibilidade)
-        self.qtd_input.valueChanged.connect(self._atualizar_disponibilidade)
+        self.qtd_input.valueChanged.connect(self._mostrar_disponibilidade)
         self.carregar_provas()
-        self._atualizar_disponibilidade()
+        self.lbl_disponiveis.setText("Escolha os filtros para conferir a disponibilidade.")
 
     @staticmethod
     def _label(texto):
@@ -182,29 +190,50 @@ class GeradorProvaPage(QWidget):
             filtros["topico"] = topico
         if tipo:
             filtros["tipo"] = tipo
-        try:
-            prova_id = repo.criar_prova(
-                nome,
-                filtros,
-                self.qtd_input.value(),
-                self.tempo_input.value() or None,
-            )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Prova não criada", str(exc))
+        if self.generation_task.running:
             return
+        quantidade = self.qtd_input.value()
+        tempo = self.tempo_input.value() or None
+        self._habilitar_configuracao(False)
+        self.gerar_btn.setText('Gerando…')
+        def gerar():
+            proof_id = repo.criar_prova(nome, filtros, quantidade, tempo)
+            from src.db.models import ProvaQuestao
+            return proof_id, ProvaQuestao.select().where(ProvaQuestao.prova == proof_id).count(), quantidade
+        self.generation_task.submit(gerar, self._prova_gerada, self._erro_geracao)
+
+    def _habilitar_configuracao(self, enabled):
+        for control in (self.nome_input, self.disciplina_input, self.banca_input, self.topico_input,
+                        self.tipo_input, self.qtd_input, self.tempo_input, self.gerar_btn):
+            control.setEnabled(enabled)
+
+    def _erro_geracao(self, message):
+        self._habilitar_configuracao(True)
+        self.gerar_btn.setText('Gerar prova')
+        QMessageBox.warning(self, 'Prova não criada', message)
+
+    def _prova_gerada(self, result):
+        prova_id, quantidade, solicitada = result
+        self._habilitar_configuracao(True)
+        self.gerar_btn.setText('Gerar prova')
         if prova_id == 0:
             QMessageBox.warning(self, "Aviso", "Nenhuma questão encontrada com estes filtros. A prova não foi criada.")
         else:
             logger.info("Prova %s criada", prova_id)
-            quantidade = len(repo.buscar_questoes_da_prova(prova_id))
             mensagem = f"Prova gerada com {quantidade} questão(ões)."
-            if quantidade < self.qtd_input.value():
-                mensagem += f" Foram solicitadas {self.qtd_input.value()}, mas apenas {quantidade} estavam aptas com estes filtros."
+            if quantidade < solicitada:
+                mensagem += f" Foram solicitadas {solicitada}, mas apenas {quantidade} estavam aptas com estes filtros."
             QMessageBox.information(self, "Sucesso", mensagem)
             self.nome_input.clear()
             self.carregar_provas()
 
     def _atualizar_disponibilidade(self):
+        self.availability_task.invalidate()
+        self._available = None
+        self.lbl_disponiveis.setText('Conferindo questões disponíveis…')
+        self._availability_timer.start()
+
+    def _consultar_disponibilidade(self):
         filtros = {}
         disciplina = self.disciplina_input.currentText().strip()
         if disciplina and disciplina != "Todas as disciplinas":
@@ -217,7 +246,21 @@ class GeradorProvaPage(QWidget):
             filtros["topico"] = topico
         if self.tipo_input.currentData():
             filtros["tipo"] = self.tipo_input.currentData()
-        total = repo.contar_questoes_elegiveis(filtros)
+        self.availability_task.submit(lambda: repo.contar_questoes_elegiveis(filtros),
+                                      self._disponibilidade_recebida, self._erro_disponibilidade)
+
+    def _erro_disponibilidade(self, message):
+        self._available = None
+        self.lbl_disponiveis.setText('Não foi possível conferir a disponibilidade. ' + message)
+
+    def _disponibilidade_recebida(self, total):
+        self._available = total
+        self._mostrar_disponibilidade()
+
+    def _mostrar_disponibilidade(self, *_):
+        if self._available is None:
+            return
+        total = self._available
         disponibilidade = f"{total} questão(ões) disponíveis"
         if 0 < total < self.qtd_input.value():
             disponibilidade += f". A prova terá {total} das {self.qtd_input.value()} solicitadas."

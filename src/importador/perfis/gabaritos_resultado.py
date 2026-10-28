@@ -4,6 +4,9 @@ class MapaGabarito(dict):
         super().__init__()
         self.conflitos = set()
         self.avisos = []
+        self.perfis_paginas = []
+        self.perfil_documento = None
+        self.perfil_escolhido = None
 
     def incorporar(self, respostas):
         self.conflitos.update(getattr(respostas, "conflitos", ()))

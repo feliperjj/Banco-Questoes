@@ -20,19 +20,29 @@ def _cabecalho_cargo(linhas, i):
         return True
     if i+1 >= len(linhas) or not linha.isupper() or len(linha)<5:
         return False
+    if re.match(r'(?i)^\s*PROVA\s+TIPO\s+(?:[1-4]|IV|III|II|I)\s*$', linhas[i+1]) and re.search(
+            r'(?i)\b(?:analista|agente|auditor|administrador|assistente|t[eé]cnico|engenheiro)\b', linha):
+        return True
     if re.search(r"\b(?:lingua|portugues|matematica|raciocinio|nocoes|conhecimentos|direito|informatica|legislacao|contabilidade)\b", comparavel):
         return False
     return bool(re.match(r"\s*0?1(?:\s*[:.)-]\s*[A-EX]\b|\s+2\b)", linhas[i+1], re.I))
 
 
 class FiltroContexto:
-    def __init__(self, codigo_prova: str | None = None, cargo: str | None = None):
+    def __init__(self, codigo_prova: str | None = None, cargo: str | None = None, versao: str | None = None):
         self.codigo_prova = (codigo_prova or "").lower().replace("-", "_")
         self.cargo_normalizado = _texto_comparavel(cargo)
         self.cargo_ativo = not bool(cargo)
         self.codigo_ativo = not bool(self.codigo_prova)
+        from .documentos import normalizar_versao
+        self.versao = normalizar_versao(versao)
 
     def pagina_relevante(self, texto: str) -> bool:
+        if self.versao:
+            from .documentos import _metadados
+            versoes = _metadados(texto).get("versao", ())
+            if versoes and self.versao not in versoes:
+                return False
         prova_numerada = re.fullmatch(r'(?i)prova\s*([1-4])', self.codigo_prova)
         if prova_numerada:
             # O bloco de conhecimentos básicos é compartilhado pelas provas;
@@ -106,6 +116,23 @@ class FiltroContexto:
         # rótulos antes da seleção da coluna.
         if re.fullmatch(r"(?i)prova\s*[1-4]", self.codigo_prova.strip()):
             return linhas
+        from .documentos import cabecalho_codigo_cargo
+        headers = [cabecalho_codigo_cargo(linha) for linha in linhas]
+        if any(headers):
+            selected = {code.strip().upper() for code in self.codigo_prova.split(";") if code.strip()}
+            result, active, category = [], False, ""
+            for line, header in zip(linhas, headers):
+                if re.match(r"(?i)^\s*cargo\s*:", line):
+                    category = _texto_comparavel(line)
+                    active = False
+                if header:
+                    code, title = header
+                    role_matches = (not self.cargo_normalizado or self.cargo_normalizado in _texto_comparavel(line)
+                                    or self.cargo_normalizado in category)
+                    active = (not selected or code in selected) and role_matches
+                if active:
+                    result.append(line)
+            return result
         # O código completo já selecionou esta página/bloco. Não reaplicar um
         # recorte por cargo amplo (como EMBRAPA), que pode cortar o trecho do
         # gabarito específico depois do cabeçalho da opção.
@@ -117,7 +144,8 @@ class FiltroContexto:
             for codigo in codigos_selecionados
         ):
             return linhas
-        pedido = re.search(r'(?i)(?:prova\s+tipo|tipo|prova|t)\s*(\d+)\b', self.codigo_prova)
+        pedido = re.search(r'(?i)(?:prova\s+tipo|tipo|prova|t)\s*(\d+)\b',
+                           "Tipo " + self.versao if self.versao else self.codigo_prova)
         tipos = [re.search(r'(?i)\bprova\s+tipo\s+(\d+)\b', linha) for linha in linhas]
         if any(tipos):
             selecionadas = []

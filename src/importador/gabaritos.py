@@ -77,6 +77,9 @@ def extrair_gabaritos_pdf(
     *,
     usar_ocr: bool = True,
     numeros_esperados: set[int] | None = None,
+    perfil_escolhido: str | None = None,
+    perfis_paginas: dict[int, str] | None = None,
+    versao: str | None = None,
     _ocr=None,
 ) -> dict[int, str]:
     """Extrai o mapa questão -> resposta, respeitando cargo/código quando informado.
@@ -89,27 +92,41 @@ def extrair_gabaritos_pdf(
     from .perfis.gabaritos_resultado import MapaGabarito
     gabaritos = MapaGabarito()
     paginas_relevantes = []
+    escolhas_paginas = {int(n): perfil for n, perfil in (perfis_paginas or {}).items()}
+    perfis_paginas = []
+    textos = []
     tabelas = MapaGabarito()
-    contexto = FiltroContexto(codigo_prova, cargo)
+    contexto = FiltroContexto(codigo_prova, cargo, versao)
     with pdfplumber.open(caminho) as pdf:
         for numero_pagina, pagina in enumerate(pdf.pages):
             texto = _corrigir_encoding_ocr(pagina.extract_text() or "")
-            grade = _extrair_grade_identificada(pagina, texto, codigo_prova, cargo)
             if not texto.strip():
+                grade = _extrair_grade_identificada(pagina, texto, codigo_prova, cargo)
+                perfis_paginas.append({"pagina": numero_pagina + 1, "perfil": "sem_texto", "selecionado": "sem_texto"})
                 # A seleção de páginas escaneadas depende do cabeçalho lido
                 # pelo OCR; não descartar antes de poder verificar o contexto.
                 paginas_relevantes.append(numero_pagina)
                 if grade is not None:
                     gabaritos.incorporar(grade)
                 continue
+            textos.append(texto)
             if not contexto.pagina_relevante(texto):
                 continue
+            grade = _extrair_grade_identificada(pagina, texto, codigo_prova, cargo)
             # A leitura geométrica pode capturar só as marcações anuladas em
             # gabaritos tabulares. Mantê-la como complemento permite que o
             # extrator textual do perfil complete primeiro a sequência inteira.
+            perfil_pagina = classificar_gabarito(texto)
+            escolhido = escolhas_paginas.get(numero_pagina + 1) or perfil_escolhido
+            perfis_paginas.append({"pagina": numero_pagina + 1, "perfil": perfil_pagina.padrao,
+                                   "selecionado": escolhido or perfil_pagina.padrao})
+            if escolhido and escolhido != perfil_pagina.padrao:
+                gabaritos.avisos.append(
+                    f"Perfil {escolhido} incompatível com a estrutura da página {numero_pagina + 1}; página mantida pendente."
+                )
+                continue
             if grade is not None:
                 tabelas.incorporar(grade)
-            perfil_pagina = classificar_gabarito(texto)
             linhas = [re.sub(r"\s+", " ", linha).strip() for linha in texto.splitlines()]
             paginas_relevantes.append(numero_pagina)
             linhas_filtradas = contexto.linhas_do_cargo(linhas)
@@ -118,8 +135,8 @@ def extrair_gabaritos_pdf(
                 tabelas.incorporar(_extrair_gabaritos_tabelas(pagina))
             linhas = linhas_filtradas
             resultado = selecionar_extrator(
-                texto, contexto.codigo_prova, contexto.cargo_normalizado,
-                perfil=perfil_pagina.padrao,
+                texto, "Prova " + contexto.versao if contexto.versao else contexto.codigo_prova, contexto.cargo_normalizado,
+                perfil=escolhido or perfil_pagina.padrao,
             ).extrair(linhas)
             if resultado or getattr(resultado, "conflitos", None):
                 gabaritos.incorporar(resultado)
@@ -127,15 +144,26 @@ def extrair_gabaritos_pdf(
     logger.info("Gabarito extraído: %s itens de %s", len(gabaritos), caminho)
     # Tabelas complementam o texto; nunca substituem uma resposta textual.
     gabaritos.complementar(tabelas)
-    faltantes = set(numeros_esperados or ()) - set(gabaritos)
+    faltantes = set(numeros_esperados or ()) - set(gabaritos) - set(gabaritos.conflitos)
+    perfil_documento = classificar_gabarito("\n".join(textos)) if textos else None
+    metadata = perfil_documento.metadados or {} if perfil_documento else {}
+    from .perfis.documentos import versao_da_selecao
+    selecoes = {"cargo": cargo, "codigo": codigo_prova, "versao": versao or versao_da_selecao(codigo_prova)}
+    escopo_pendente = any(len(values) > 1 and not selecoes.get(name) for name, values in metadata.items()
+                          if name in selecoes)
     # Sem números esperados, OCR é fallback apenas para extração vazia. Isso
     # evita completar um gabarito curto e íntegro com ruído de outras páginas.
-    precisa_ocr = usar_ocr and (not gabaritos or bool(faltantes))
+    precisa_ocr = usar_ocr and bool(paginas_relevantes) and not escopo_pendente and (
+        not gabaritos and not gabaritos.conflitos or bool(faltantes))
     if precisa_ocr:
         resultado_ocr = (_ocr or _extrair_gabaritos_ocr)(
             caminho, cargo=cargo, codigo_prova=codigo_prova, indices_paginas=paginas_relevantes,
         )
         gabaritos.complementar(resultado_ocr, numeros_esperados)
+    gabaritos.perfis_paginas = perfis_paginas
+    gabaritos.perfil_documento = perfil_documento
+    gabaritos.perfil_escolhido = perfil_escolhido
+    gabaritos.selecao_escopo = {"codigo": codigo_prova or "", "cargo": cargo or "", "versao": contexto.versao}
     return gabaritos
 
 

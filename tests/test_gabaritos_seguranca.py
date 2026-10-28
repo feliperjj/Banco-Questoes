@@ -143,8 +143,9 @@ def test_ocr_respeita_cargo_tipo_e_numeracao_oficial(monkeypatch):
     deteccoes = [([[0, i * 30], [400, i * 30], [400, i * 30 + 10], [0, i * 30 + 10]], l, .99)
                  for i, l in enumerate(linhas)]
     monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime', SimpleNamespace(RapidOCR=lambda: lambda _: (deteccoes, None)))
-    pagina = SimpleNamespace(extract_text=lambda: '', to_image=lambda **_: SimpleNamespace(
-        original=SimpleNamespace(convert=lambda _: np.zeros((10, 10, 3), dtype=np.uint8))))
+    pagina = SimpleNamespace(extract_text=lambda: '')
+    monkeypatch.setattr('src.importador.pdf_render.render_page_image',
+                        lambda *args, **kwargs: np.zeros((10, 10, 3), dtype=np.uint8))
     monkeypatch.setattr(extrator.pdfplumber, 'open', lambda _: Pdf([pagina]))
     assert _extrair_gabaritos_ocr('cebraspe.pdf', cargo='ALVO', codigo_prova='TIPO 2') == {21: 'D', 23: 'E'}
 

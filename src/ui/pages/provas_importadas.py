@@ -16,12 +16,16 @@ from PySide6.QtWidgets import (
 )
 
 import src.models.questoes_repo as repo
+from src.ui.database_task import DatabaseTask
 from src.ui.components.imported_exam_preview import ImportedExamPreviewDialog
 
 
 class ProvasImportadasPage(QWidget):
     def __init__(self):
         super().__init__()
+        self.load_task = DatabaseTask(self)
+        self.preview_task = DatabaseTask(self)
+        self.create_task = DatabaseTask(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(30, 26, 30, 26)
         layout.setSpacing(16)
@@ -74,15 +78,23 @@ class ProvasImportadasPage(QWidget):
         cartao_layout.addWidget(self.tabela, 1)
         layout.addWidget(cartao, 1)
 
-        self.carregar_provas()
 
     def showEvent(self, event):
         super().showEvent(event)
         self.carregar_provas()
 
     def carregar_provas(self):
-        provas = repo.listar_provas_cadastradas()
-        provas.extend(repo.listar_lotes_importados_sem_prova())
+        self.vazio.setText('Conferindo a disponibilidade das provas…')
+        self.vazio.show()
+        def carregar():
+            return repo.listar_provas_cadastradas() + repo.listar_lotes_importados_sem_prova()
+        self.load_task.submit(carregar, self._provas_recebidas, self._erro_carregamento)
+
+    def _erro_carregamento(self, message):
+        self.vazio.setText('Não foi possível carregar as provas. ' + message)
+        self.vazio.show()
+
+    def _provas_recebidas(self, provas):
         self.vazio.setVisible(not provas)
         self.tabela.setVisible(bool(provas))
         self.tabela.clearContents()
@@ -141,14 +153,13 @@ class ProvasImportadasPage(QWidget):
             self.tabela.setCellWidget(row, 3, container)
 
     def ver_questoes(self, prova):
-        try:
-            if prova.get("origem_tipo") == "lote_importado":
-                questoes = repo.consultar_questoes_importadas(questao_ids=prova["questao_ids"])
-            else:
-                questoes = repo.consultar_questoes_importadas(prova["id"])
-        except ValueError as exc:
-            QMessageBox.warning(self, "Não foi possível consultar a prova", str(exc))
-            return
+        self.vazio.setText('Carregando as questões…')
+        self.vazio.show()
+        def carregar():
+            return repo.consultar_questoes_importadas(questao_ids=prova['questao_ids']) if prova.get('origem_tipo') == 'lote_importado' else repo.consultar_questoes_importadas(prova['id'])
+        self.preview_task.submit(carregar, lambda questoes: self._abrir_previa(prova, questoes), self._erro_carregamento)
+
+    def _abrir_previa(self, prova, questoes):
         dialog = ImportedExamPreviewDialog(prova, questoes, self)
         if dialog.exec() == QDialog.Accepted:
             self.fazer_prova(prova)
@@ -165,7 +176,7 @@ class ProvasImportadasPage(QWidget):
         if execucao is None:
             QMessageBox.critical(self, "Erro", "Tela de execução de prova não encontrada.")
             return
-        if execucao.em_andamento:
+        if execucao.em_andamento or execucao._starting:
             QMessageBox.information(
                 self,
                 "Prova em andamento",
@@ -173,7 +184,7 @@ class ProvasImportadasPage(QWidget):
             )
             return
 
-        try:
+        def criar():
             if prova.get("origem_tipo") == "lote_importado":
                 if 0 < prova.get("qtd_avaliaveis", 0) < prova.get("qtd_questoes", 0):
                     tentativa_prova_id = repo.criar_prova_parcial_importada(
@@ -195,12 +206,15 @@ class ProvasImportadasPage(QWidget):
                     None,
                     prova_cadastrada_id=prova["id"],
                 )
-        except ValueError as exc:
-            QMessageBox.warning(self, "Prova indisponível", str(exc))
-            self.carregar_provas()
+            return tentativa_prova_id, repo.obter_prova(tentativa_prova_id)['nome']
+        if self.create_task.running:
             return
+        self.vazio.setText('Preparando a prova…')
+        self.vazio.show()
+        self.create_task.submit(criar, lambda result: self._iniciar_preparada(execucao, stacked, result), self._erro_carregamento)
 
-        nome_execucao = repo.obter_prova(tentativa_prova_id)["nome"]
+    def _iniciar_preparada(self, execucao, stacked, result):
+        tentativa_prova_id, nome_execucao = result
         execucao.iniciar(tentativa_prova_id, nome_execucao)
         indice = stacked.indexOf(execucao)
         stacked.setCurrentIndex(indice)

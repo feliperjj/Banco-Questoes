@@ -1,3 +1,4 @@
+from tests.ui_wait import wait_ui_jobs
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QPushButton
@@ -21,6 +22,8 @@ def test_gabarito_salvo_pendente_nao_aparece_como_sem_gabarito(tmp_path):
     assert proof["qtd_avaliaveis"] == 0
     assert proof["pronta"] is False
     page = ProvasImportadasPage()
+    page.show()
+    wait_ui_jobs()
     status = page.tabela.item(0, 2)
     assert "Revisão pendente" in status.text()
     assert "sem gabarito" not in status.text()

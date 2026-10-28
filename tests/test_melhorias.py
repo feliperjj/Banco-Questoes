@@ -1,3 +1,4 @@
+from tests.ui_wait import wait_ui_jobs
 import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox, QTableWidgetItem
 
@@ -76,6 +77,8 @@ def test_disponibilidade_igual_a_selecao(banco, app, tmp_path):
     approve_with_evidence(elegivel, fonte, 'Certo')
     assert repo.contar_questoes_elegiveis() == 1
     pagina = GeradorProvaPage()
+    pagina.show()
+    wait_ui_jobs()
     assert pagina.lbl_disponiveis.text().startswith('1 ')
     prova = repo.criar_prova('Teste', {}, 10, 0)
     assert len(repo.buscar_questoes_da_prova(prova)) == 1
@@ -89,6 +92,7 @@ def test_retomada_preserva_respostas_posicao_tempo_e_finaliza(banco, app, monkey
     prova = repo.criar_prova('Retomada', {}, 2, 1)
     pagina = ExecucaoProvaPage()
     pagina.iniciar(prova, 'Retomada')
+    wait_ui_jobs()
     qid = pagina.questoes[0]['id']
     pagina.salvar_resposta_temp(True, qid, 'Certo')
     pagina.proxima_questao()
@@ -101,6 +105,7 @@ def test_retomada_preserva_respostas_posicao_tempo_e_finaliza(banco, app, monkey
     assert repo.listar_provas()[0]['em_andamento']
     retomada = ExecucaoProvaPage()
     retomada.iniciar(prova, 'Retomada')
+    wait_ui_jobs()
     assert retomada.tentativa_id == tentativa
     assert retomada.respostas_memoria == {qid: 'Certo'}
     assert retomada.idx_atual == 1 and retomada.tempo_gasto == 1

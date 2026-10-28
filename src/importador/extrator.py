@@ -37,9 +37,11 @@ from .gabaritos import (
 )
 from .docx_texto import extrair_texto_docx
 
-def extrair_gabaritos_pdf(caminho, codigo_prova=None, cargo=None, *, usar_ocr=True, numeros_esperados=None):
+def extrair_gabaritos_pdf(caminho, codigo_prova=None, cargo=None, *, usar_ocr=True, numeros_esperados=None, perfil_escolhido=None, perfis_paginas=None, versao=None):
     return gabaritos.extrair_gabaritos_pdf(caminho, codigo_prova, cargo,
-        usar_ocr=usar_ocr, numeros_esperados=numeros_esperados, _ocr=_extrair_gabaritos_ocr)
+        usar_ocr=usar_ocr, numeros_esperados=numeros_esperados,
+        perfil_escolhido=perfil_escolhido, perfis_paginas=perfis_paginas, versao=versao,
+        _ocr=_extrair_gabaritos_ocr)
 
 
 def extrair_texto(caminho: str) -> str:

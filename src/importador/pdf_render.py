@@ -81,6 +81,26 @@ def render_region(path, page, bbox, *, scale=2.0, output=None):
         raise ValueError("Resposta inválida do processo de renderização.") from error
 
 
+def render_image(path, page, bbox, *, scale=2.0):
+    """Carrega o recorte isolado sem inicializar PDFium no processo da UI."""
+    from PIL import Image
+    from uuid import uuid4
+    from src.config import IMAGE_DIR
+    staging = IMAGE_DIR / ".rendering"
+    staging.mkdir(parents=True, exist_ok=True)
+    target = staging / f"{uuid4().hex}.png"
+    try:
+        render_region(path, page, bbox, scale=scale, output=target)
+        with Image.open(target) as image:
+            return image.convert("RGB").copy()
+    finally:
+        target.unlink(missing_ok=True)
+
+
+def render_page_image(page, *, resolution=150):
+    return render_image(page.pdf.stream.name, page.page_number, page.bbox, scale=resolution / 72)
+
+
 @lru_cache(maxsize=4)
 def _page_image(path, page_number, scale, file_size, modified_ns):
     import pypdfium2 as pdfium

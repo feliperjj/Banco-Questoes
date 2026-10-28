@@ -4,9 +4,11 @@ Execute: python -m scripts.verificar_ui_reforma --output caminho
 Defina QT_SCALE_FACTOR antes de iniciar para verificar outra escala.
 """
 import argparse
+from contextlib import nullcontext
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from time import sleep
+from uuid import uuid4
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -30,7 +32,12 @@ def main():
     if font.exists():
         QFontDatabase.addApplicationFont(str(font))
     app.setStyleSheet((Path(__file__).resolve().parents[1] / 'src/ui/styles.qss').read_text(encoding='utf-8'))
-    with TemporaryDirectory() as temp:
+    # A execução do plano exige que todo artefato de verificação fique no
+    # diretório isolado, sem depender do TEMP global do Windows.
+    temp_root = os.environ.get('BANCO_QUESTOES_TEST_ROOT')
+    preview_dir = Path(temp_root or args.output).resolve() / f'ui-preview-{uuid4().hex}'
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    with nullcontext(str(preview_dir)) as temp:
         init_db(str(Path(temp) / 'preview.db'))
         try:
             dados = [dict(numero=i, enunciado='A administração pública deve observar os princípios previstos na Constituição Federal. Assinale a alternativa correta.',
@@ -42,8 +49,13 @@ def main():
             repo.criar_questoes_em_lote(dados)
             window = MainWindow()
             page = window.pages.widget(2)
-            page.caminho_questoes_pendente = 'concurso_analista_2026.pdf'
+            visual_source = Path(temp) / 'concurso_analista_2026.pdf'
+            visual_source.write_bytes(b'ui-layout-only-source')
+            page.caminho_questoes_pendente = str(visual_source)
             page._finalizar_importacao_questoes(dados)
+            # Este script verifica geometria de widgets; a persistência de
+            # rascunhos com fonte íntegra tem testes funcionais próprios.
+            page._draft_timer.stop()
             for width, height in [(960, 640), (1240, 800)]:
                 window.resize(width, height)
                 window.show()
@@ -55,6 +67,15 @@ def main():
                     button = page.btn_salvar_todas if step == 2 else page.btn_proxima
                     assert button.isVisible() and page.rect().contains(button.geometry())
                     assert window.grab().save(str(out / f'importacao-{width}-{step}.png'))
+                if width == 960:
+                    page._start(lambda: sleep(2), "Leitura de teste para conferir o cancelamento.")
+                    app.processEvents()
+                    assert page.btn_cancelar.isVisible() and page.rect().contains(page.btn_cancelar.geometry())
+                    assert window.grab().save(str(out / 'importacao-cancelamento-960.png'))
+                    page._cancelar_operacao()
+                    while page.task.running:
+                        app.processEvents()
+                        sleep(0.01)
                 window.pages.setCurrentIndex(1)
                 app.processEvents()
                 assert window.grab().save(str(out / f'acervo-{width}.png'))

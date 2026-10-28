@@ -142,25 +142,42 @@ class ExtratorMultiprova(ExtratorBanca):
             re.findall(r"\b(\d{1,3})\s*(?:[-–:.)]\s*)?([A-EX])\b", linha.upper())
             for linha in linhas
         ]
-        encontrado = re.fullmatch(r"(?:PROVA\s*)?(\d+)", self.codigo_prova.strip(), re.IGNORECASE)
+        from .documentos import normalizar_versao
+        encontrado = re.fullmatch(r"(\d+)", normalizar_versao(self.codigo_prova))
         if not encontrado or not 1 <= int(encontrado.group(1)) <= 4:
             logger.warning("Grade multiprova exige seleção explícita de prova 1 a 4")
             return {}
+        # Blocos empilhados têm um rótulo por linha e duas linhas adjacentes
+        # de números/respostas. Não são colunas de pares número-alternativa.
+        headers = [(i, re.findall(r'(?i)\b(?:PROVA\s+TIPO|PROVA|TIPO)\s*([1-4]|IV|III|II|I)\b', line))
+                   for i, line in enumerate(linhas)]
+        headers = [(i, labels) for i, labels in headers if labels]
+        numeric_rows = any(re.fullmatch(r'\s*\d{1,3}(?:\s+\d{1,3}){2,}\s*', line) for line in linhas)
+        if headers and numeric_rows and all(len(labels) == 1 for _, labels in headers):
+            result = MapaGabarito()
+            for index, (start, labels) in enumerate(headers):
+                if normalizar_versao(labels[0]) != encontrado.group(1):
+                    continue
+                end = headers[index + 1][0] if index + 1 < len(headers) else len(linhas)
+                result.incorporar(_extrair_duas_linhas(linhas[start + 1:end], '', ''))
+            return result
         # Preservar a ordem física dos cabeçalhos. Ordenar por número pode
         # selecionar silenciosamente a coluna errada quando a extração textual
         # apresenta, por exemplo, "PROVA 2 PROVA 1".
         cabecalho = list(dict.fromkeys(
-            int(n) for linha in linhas for n in re.findall(r'(?i)\bPROVA\s*([1-4])\b', linha)
+            int(normalizar_versao(n)) for linha in linhas for n in
+            re.findall(r'(?i)\b(?:PROVA|TIPO|T)\s*([1-4]|IV|III|II|I)\b', linha)
         ))
         if int(encontrado.group(1)) not in cabecalho:
             return MapaGabarito()
         coluna = cabecalho.index(int(encontrado.group(1)))
         resultado = MapaGabarito()
         for pares_linha in pares:
-            if len(pares_linha) != 2 * len(cabecalho):
+            if not cabecalho or not pares_linha or len(pares_linha) % len(cabecalho):
                 continue
-            inicio = coluna * 2
-            for numero, resposta in pares_linha[inicio:inicio + 2]:
+            quantidade = len(pares_linha) // len(cabecalho)
+            inicio = coluna * quantidade
+            for numero, resposta in pares_linha[inicio:inicio + quantidade]:
                 resultado.incorporar({int(numero): resposta})
         return resultado
 
@@ -175,7 +192,7 @@ class ExtratorItensCE(ExtratorBanca):
 def selecionar_extrator(texto: str, codigo_prova: str = "", cargo_normalizado: str = "", *, perfil: str = "") -> ExtratorBanca:
     if perfil == "cex_itens_em_grade":
         return ExtratorItensCE()
-    if perfil == "multiprova_por_colunas" or (
+    if perfil in {"multiprova_por_colunas", "matriz_multiversao"} or (
         re.search(r"PROVA\s*1\b", texto, re.IGNORECASE) and re.search(r"PROVA\s*2\b", texto, re.IGNORECASE)
     ):
         return ExtratorMultiprova(codigo_prova)

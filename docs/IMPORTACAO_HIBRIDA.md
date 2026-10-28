@@ -69,6 +69,62 @@ importação, incluindo os 120 vínculos da PF/CEBRASPE 2025.
 - `perfis/gabaritos_contexto.py`, `gabaritos_texto.py`, `gabaritos_grades.py`, `gabaritos_ocr.py`, `gabaritos_resultado.py`: seleção, leitura e conflitos.
 - `servico.py`: fluxo usado pela tela, sem acesso ao banco durante a extração.
 
+## Dois funis especializados — implementação parcial
+
+O reconhecimento do caderno e do gabarito agora produz perfis documentais e
+diagnósticos por página. `perfis/registro.py` descreve os perfis conhecidos;
+`associacao_documental.py` compara família, identificadores, escopo e cobertura
+numérica; a tela permite reprocessar um caderno por um perfil candidato. Para
+gabaritos com vários layouts, a tela mantém o roteamento por página e não força
+um perfil global.
+
+As listas editáveis de cargo, código e versão exibem as opções reconhecidas no
+PDF. Havendo várias opções, a tela exige seleção e nova leitura antes de
+vincular respostas; uma seleção incompatível com o caderno permanece bloqueada.
+**Conferir leitura por página** permite ajustar separadamente caderno e
+gabarito. Blocos consecutivos mantêm a leitura e o contexto entre páginas; uma
+escolha estruturalmente incompatível gera pendência. Páginas sem texto ficam
+identificadas e não são consideradas íntegras por uma seleção manual de perfil.
+
+Ao salvar, `lote_verificado.py` registra a extração e as fontes dentro de uma
+transação. A certificação automática exige evidência de conteúdo e gabarito,
+escopo compatível e regiões físicas verificáveis. Itens sem essas evidências
+ficam pendentes; salvar ou selecionar um perfil não libera questões. Lotes
+revisados sem arquivo de fonte acessível também podem ser salvos, mas não são
+certificados automaticamente.
+
+Os totais devolvidos ao lote vêm de `assess_version`, distinguindo certificado
+automático válido de elegibilidade efetiva. A tela mostra extraídas, com
+resposta, salvas, verificadas, elegíveis e pendentes; quantidade esperada só
+aparece como número quando declarada pela fonte. Os atalhos após o salvamento
+abrem a prévia da prova e suas pendências ou o gerador aleatório.
+
+Figuras, fac-símiles e páginas para OCR são renderizados por PDFium em processo
+isolado. O lote reutiliza esse processo e mantém o confronto dos pixels com o
+PDF. Falhas de extração, preparação ou transação removem apenas recursos novos;
+arquivos já existentes permanecem preservados. Um recorte contextual completo
+não é substituído por uma região geométrica ainda não aprovada.
+
+O botão de cancelamento sinaliza a tarefa em segundo plano: leituras em curso
+terminam a etapa atual antes de descartar o resultado; cancelamento durante a
+gravação reverte o lote inteiro. Se os mesmos dois PDFs já tiverem sido
+importados e o conteúdo permanecer igual, a prova cadastrada é reutilizada. Se
+o conteúdo revisado divergir, o salvamento exige marcar a opção de criar nova
+versão, preservando a composição histórica e as versões vinculadas a tentativas.
+
+Uma reimportação completa também pode retomar itens já salvos de um lote
+parcial. A identidade inclui os dois PDFs e o escopo; IDs, evidências e
+rejeições humanas são preservados. Escopos distintos geram composições
+distintas. Se o legado não comprovar o escopo/par de fontes, a tela orienta
+conferir os registros existentes ou retomar o rascunho, evitando fusão ou
+duplicação automática.
+
+Essa integração ainda não comprova suporte integral ao corpus. O relatório
+[`RELATORIO_DOIS_FUNIS_ESPECIALIZADOS_LUNA.md`](RELATORIO_DOIS_FUNIS_ESPECIALIZADOS_LUNA.md)
+registra pares testados, hashes, limitações observadas e critérios que faltam.
+Em particular, perfil reconhecido não equivale a extração de gabarito correta;
+confira os resultados do corpus antes de declarar qualquer documento suportado.
+
 ## Diagnóstico sem gravar no banco
 
 ```powershell
@@ -88,4 +144,35 @@ O JSON mostra perfis, candidatos, avisos, números ausentes/duplicados e o conte
 
 A referência atual, após a correção de lacunas, é `tests/fixtures/perfis_corrigidos_manifest.json`. As anteriores permanecem em `perfis_manifest.json` e `perfis_hibridos_manifest.json`. Referências de conteúdo são registros de comportamento e podem conter defeitos conhecidos; não substituem testes com expectativas conferidas na fonte. Não atualizar automaticamente uma referência para esconder uma diferença. Resultados e regras acrescentadas: `RELATORIO_CORRECAO_LACUNAS.md`.
 
+O verificador aceita `--diagnostico-json caminho.json` para registrar a comparação
+estrita e a projeção dos campos do contrato antigo. Essa classificação não
+altera o resultado estrito nem aprova os campos novos de contexto/instruções.
+
 Para acrescentar um perfil: definir evidências de reconhecimento e rejeição, incluir exemplos positivos e negativos de outro layout, verificar texto/alternativas/números e executar a comparação de referências. Uma nova estratégia não deve completar números ou respostas ausentes por suposição.
+# Validação do par real S201
+
+O caderno EPAGRI/S201 enviado em 28/10 foi testado pela interface com seu
+gabarito: 50 questões e respostas preservadas, 46 elegíveis e quatro anulações
+(16, 18, 19 e 36) bloqueadas. A consulta mantém os 50 itens; a resolução é
+identificada como treino parcial de 46/50. Treino parcial com retomada e simulado
+aleatório terminaram com 46/46 acertos no banco isolado.
+
+O leitor de páginas com caixas de seleção remove cabeçalhos repetidos antes
+de dividir as colunas e encerra a leitura objetiva antes da redação. Os recortes
+preservam expoentes, tabelas e fórmulas. T11/T12 permanecem códigos de cargo;
+não indicam versões. Cargos homônimos exigem o código correto no gabarito.
+
+Cópias de fontes catalogadas fora de `samples` podem reutilizar a associação
+somente após comparação integral de texto e pixels de ambos os PDFs. A
+autoridade de liberação recompõe essa prova e rejeita alterações. Isso não
+substitui a identificação documental de pares novos nem comprova generalização
+para PDFs ainda não conferidos. Veja o relatório de execução para as limitações
+que ainda impedem o aceite integral do plano.
+
+## Fechamento real dos dois funis — 28/10
+
+Três famílias passaram pela interface em bancos isolados: EPAGRI/S201 (50 itens/46 elegíveis), Morungaba com rótulos QUESTÃO (40/38) e EMBRAPA/Sistemas C/E com texto compartilhado (100/94). Os itens restantes são anulados. Composições completas preservadas; treinos parciais com retomada e simulados aleatórios concluídos com 46/46, 38/38 e 94/94.
+
+Dataprev tipo 4: 70 respostas conferidas no quadro da página 14; tipo 3 recusado. O gabarito é preliminar e a identidade impressa é insuficiente para certificação independente. São 70 questões para conferência e zero elegíveis, sem simulado. O código no nome do arquivo não substitui comprovação documental. Permanecem necessários gabarito definitivo e identidade verificável/revisão humana efetiva.
+
+Apoios relativos e recursos compartilhados foram preservados. Cabeçalhos/rodapés saem do corpo mantendo banca/ano documentais; números internos não sobrescrevem a disciplina de questões anteriores. O relatório de execução reúne evidências, limites e validações finais. Os três pares conhecidos e a Dataprev ajustada não comprovam generalização cega. OCR de digitalização real também não foi comprovado.

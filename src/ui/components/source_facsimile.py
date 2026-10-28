@@ -26,6 +26,7 @@ class SourceFacsimile(QScrollArea):
         while self.rows.count():
             item = self.rows.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
         self.images = []
         for asset in assets:
@@ -52,7 +53,7 @@ class SourceFacsimile(QScrollArea):
             return
         width = max(100, self.viewport().width() - 16)
         for label, pixmap in self.images:
-            scaled = pixmap.scaledToWidth(width, Qt.SmoothTransformation)
+            scaled = pixmap.scaledToWidth(min(width, pixmap.width(), 800), Qt.SmoothTransformation)
             label.setPixmap(scaled)
             label.setFixedHeight(scaled.height())
 

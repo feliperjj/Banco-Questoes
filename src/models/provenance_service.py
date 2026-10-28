@@ -14,6 +14,7 @@ import pdfplumber
 from peewee import IntegrityError
 
 from src.db.database import db, init_db
+from src.models import eligibility_read as read_batch
 from src.db.models import (
     Alternativa,
     DocumentoFonte,
@@ -84,7 +85,7 @@ def create_source(path: str | Path, *, tipo: str = "desconhecido") -> int:
 
 def verify_source(source_id: int) -> dict:
     """Compara o arquivo atual com o SHA-256 registrado, sem alterar o estado."""
-    source = DocumentoFonte.get_by_id(source_id)
+    source = read_batch.record(DocumentoFonte, source_id)
     path = Path(source.localizacao).expanduser() if source.localizacao else None
     if path is None or not path.is_file():
         return {"disponivel": False, "integro": False, "motivo": "arquivo_ausente"}
@@ -153,7 +154,7 @@ def _current_content(questao: Questao) -> dict:
         data["imagem_sha256"] = _hash_file(image_path) if image_path and image_path.is_file() else None
     data["alternativas"] = [
         {"letra": alt.letra, "texto": alt.texto}
-        for alt in Alternativa.select().where(Alternativa.questao == questao.id).order_by(Alternativa.letra)
+        for alt in (read_batch.alternatives(questao.id) if read_batch.alternatives(questao.id) is not None else Alternativa.select().where(Alternativa.questao == questao.id).order_by(Alternativa.letra))
     ]
     return data
 
@@ -195,7 +196,7 @@ def _verify_facsimile_pixels(item: dict, evidence_by_id: dict[int, EvidenciaQues
         evidence = evidence_by_id.get(item.get("evidencia_id"))
         if evidence is None or evidence.parte not in {"conteudo", "contexto"} or evidence.pagina is None:
             raise ValueError("evidencia_facsimile_invalida")
-        source = DocumentoFonte.get_by_id(evidence.documento_fonte_id)
+        source = read_batch.record(DocumentoFonte, evidence.documento_fonte_id)
         if source.tipo.casefold() != "pdf" or not source.localizacao:
             raise ValueError("facsimile_exige_pdf")
         with Image.open(_resource_path(item["path"])) as actual:
@@ -238,9 +239,17 @@ def _verify_automatic_identity(manifest: dict, refs: list[EvidenciaQuestao], tex
         if entry.get("complemento"):
             allowed_answers.add((sample_root / entry["complemento"]).resolve())
         for ref in refs:
-            source = DocumentoFonte.get_by_id(ref.documento_fonte_id)
+            source = read_batch.record(DocumentoFonte, ref.documento_fonte_id)
             path = Path(source.localizacao).resolve()
-            if (ref.parte == "gabarito" and path not in allowed_answers) or (ref.parte != "gabarito" and path != book):
+            role = "gabarito" if ref.parte == "gabarito" else "caderno"
+            declared = (identity.get("equivalencia_documental") or {}).get(role)
+            allowed = allowed_answers if role == "gabarito" else {book}
+            if declared is not None:
+                from src.importador.comparacao_fontes import comparar_documentos
+                if declared.get("sha256_fonte") != source.sha256 or not any(
+                        reference.is_file() and comparar_documentos(path, reference) == declared for reference in allowed):
+                    raise ValueError("equivalencia_documental_nao_comprovada")
+            elif path not in allowed:
                 raise ValueError("fonte_diverge_do_catalogo")
         book_hash = _hash_file(book)
         expected = {"prova": entry.get("prova") or "pdf:" + book_hash,
@@ -263,7 +272,7 @@ def _verify_automatic_identity(manifest: dict, refs: list[EvidenciaQuestao], tex
         import pdfplumber
         docs = []
         for sid in {ref.documento_fonte_id for ref in refs}:
-            source = DocumentoFonte.get_by_id(sid)
+            source = read_batch.record(DocumentoFonte, sid)
             with source_pdf(source.localizacao) as pdf:
                 docs.append(_norm_source_text("\n".join(page.extract_text() or "" for page in pdf.pages)))
         _verify_automatic_identity(manifest, refs, docs)
@@ -286,7 +295,7 @@ def _verify_source_claims(manifest: dict, refs: list[EvidenciaQuestao], version:
         content_first_line = ""
         for label, ref in ([("conteudo", ref) for ref in content_refs] + [("gabarito", ref) for ref in answer_refs]
                            + [("contexto", ref) for ref in context_refs]):
-            source = DocumentoFonte.get_by_id(ref.documento_fonte_id)
+            source = read_batch.record(DocumentoFonte, ref.documento_fonte_id)
             if source.tipo.casefold() != "pdf" or ref.pagina is None:
                 raise ValueError("claims_exigem_pdf")
             with source_pdf(source.localizacao) as pdf:
@@ -436,7 +445,7 @@ def add_evidence(
         raise ValueError("A região precisa ter largura e altura positivas e coordenadas não negativas.")
     if page_size is None or len(page_size) != 2 or not all(math.isfinite(float(value)) and float(value) > 0 for value in page_size):
         raise ValueError("Informe dimensões de página finitas e positivas.")
-    source = DocumentoFonte.get_by_id(source_id)
+    source = read_batch.record(DocumentoFonte, source_id)
     integrity = verify_source(source.id)
     if not integrity["disponivel"] or not integrity["integro"]:
         raise ValueError("A fonte está ausente ou diverge do hash registrado.")
@@ -528,7 +537,9 @@ def _evidence_for_decision(version_id: int, evidence_ids: list[int], allowed_par
     ids = list(evidence_ids or [])
     if not ids or len(ids) != len(set(ids)):
         raise ValueError("Informe IDs de evidência existentes e sem repetição.")
-    references = list(EvidenciaQuestao.select().where(EvidenciaQuestao.id.in_(ids)))
+    references = read_batch.evidence_ids(ids)
+    if references is None:
+        references = list(EvidenciaQuestao.select().where(EvidenciaQuestao.id.in_(ids)))
     by_id = {item.id: item for item in references}
     if len(by_id) != len(ids):
         raise ValueError("Um ou mais IDs de evidência não existem.")
@@ -562,7 +573,7 @@ def _validate_evidence_sources(references: list[EvidenciaQuestao]) -> None:
 def _evidence_fingerprint(references: list[EvidenciaQuestao]) -> str:
     rows = []
     for item in sorted(references, key=lambda row: row.id):
-        source = DocumentoFonte.get_by_id(item.documento_fonte_id)
+        source = read_batch.record(DocumentoFonte, item.documento_fonte_id)
         rows.append({
             "id": item.id, "parte": item.parte, "fonte": source.sha256,
             "pagina": item.pagina, "localizador": item.identificador_documento,
@@ -693,19 +704,24 @@ def record_automatic_validation(version_id: int, *, evidence_ids: list[int], man
 
 
 def get_automatic_validation(version_id: int) -> dict:
-    version = QuestaoVersao.get_or_none(QuestaoVersao.id == version_id)
+    version = read_batch.record(QuestaoVersao, version_id)
     result = {"valida": False, "motivos": [], "manifesto": {}, "registro_id": None}
     if version is None:
         result["motivos"].append("versao_inexistente")
         return result
-    latest_content = RevisaoConteudo.select().where((RevisaoConteudo.questao_versao == version_id) & (RevisaoConteudo.decisao != "pendente")).order_by(RevisaoConteudo.id.desc()).first()
-    latest_answer = RevisaoGabarito.select().where((RevisaoGabarito.questao_versao == version_id) & (RevisaoGabarito.decisao != "pendente")).order_by(RevisaoGabarito.id.desc()).first()
+    latest_content = read_batch.review(RevisaoConteudo, version_id, non_pending=True)
+    latest_answer = read_batch.review(RevisaoGabarito, version_id, non_pending=True)
     if (latest_content and latest_content.decisao == "rejeitado") or (latest_answer and latest_answer.decisao in {"conflitante", "anulado"}):
         result["motivos"].append("rejeicao_ou_conflito_humano")
         return result
-    rows = list(ValidacaoAutomatica.select().where(
-        (ValidacaoAutomatica.questao_versao == version_id) & (ValidacaoAutomatica.versao_regra == AUTOMATIC_RULE_VERSION)
-    ).order_by(ValidacaoAutomatica.id.desc()))
+    rows = read_batch.version_rows(ValidacaoAutomatica, version_id)
+    if rows is not None:
+        rows = [r for r in reversed(rows) if r.versao_regra == AUTOMATIC_RULE_VERSION]
+    else:
+        rows = list(ValidacaoAutomatica.select().where(
+            (ValidacaoAutomatica.questao_versao == version_id)
+            & (ValidacaoAutomatica.versao_regra == AUTOMATIC_RULE_VERSION)
+        ).order_by(ValidacaoAutomatica.id.desc()))
     for row in rows:
         try:
             manifest = json.loads(row.manifesto_json or "{}")
@@ -752,7 +768,7 @@ def _diagnostic(code: str, stage: str, severity: str, nature: str, message: str,
 
 
 def _version_is_current(version: QuestaoVersao) -> bool:
-    current = _current_content(version.questao)
+    current = _current_content(read_batch.record(Questao, version.questao_id))
     return _version_content_matches(version, current)
 
 
@@ -902,7 +918,7 @@ def review_answer(
 
 def assess_version(version_id: int) -> dict:
     """Retorna decisão explicável, com todos os motivos e sem efeito colateral no banco."""
-    version = QuestaoVersao.get_or_none(QuestaoVersao.id == version_id)
+    version = read_batch.record(QuestaoVersao, version_id)
     if version is None:
         item = _diagnostic("versao_inexistente", "identidade", "bloqueio", "objetiva",
                            "A versão solicitada não existe.", action="Selecione uma versão existente.")
@@ -912,13 +928,11 @@ def assess_version(version_id: int) -> dict:
                 "estado_gabarito": "desconhecido", "versao_regra": DIAGNOSTIC_RULE_VERSION}
 
     content = _version_content(version)
-    all_evidence = list(EvidenciaQuestao.select().where(EvidenciaQuestao.questao_versao == version.id).order_by(EvidenciaQuestao.id))
-    content_review = (RevisaoConteudo.select().where(
-        RevisaoConteudo.questao_versao == version.id
-    ).order_by(RevisaoConteudo.criada_em.desc(), RevisaoConteudo.id.desc()).first())
-    answer_review = (RevisaoGabarito.select().where(
-        RevisaoGabarito.questao_versao == version.id
-    ).order_by(RevisaoGabarito.criada_em.desc(), RevisaoGabarito.id.desc()).first())
+    all_evidence = read_batch.version_rows(EvidenciaQuestao, version.id)
+    if all_evidence is None:
+        all_evidence = list(EvidenciaQuestao.select().where(EvidenciaQuestao.questao_versao == version.id).order_by(EvidenciaQuestao.id))
+    content_review = read_batch.review(RevisaoConteudo, version.id, by_date=True)
+    answer_review = read_batch.review(RevisaoGabarito, version.id, by_date=True)
     content_ids = []
     answer_ids = []
     content_refs = []
@@ -1022,12 +1036,7 @@ def assess_version(version_id: int) -> dict:
     evidence_fingerprint = _evidence_fingerprint(all_evidence)
     unresolved_alerts = []
     for alert in alerts:
-        resolution = (ResolucaoDiagnostico.select().where(
-            (ResolucaoDiagnostico.questao_versao == version.id)
-            & (ResolucaoDiagnostico.codigo == alert["codigo"])
-            & (ResolucaoDiagnostico.versao_regra == DIAGNOSTIC_RULE_VERSION)
-            & (ResolucaoDiagnostico.fingerprint_evidencias == evidence_fingerprint)
-        ).order_by(ResolucaoDiagnostico.criada_em.desc(), ResolucaoDiagnostico.id.desc()).first())
+        resolution = read_batch.resolution(version.id, alert['codigo'], DIAGNOSTIC_RULE_VERSION, evidence_fingerprint)
         if resolution:
             alert["resolucao"] = {
                 "decisao": resolution.decisao,

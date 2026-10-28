@@ -2,6 +2,28 @@
 import re
 
 
+def limpar_cabecalhos_julgamento(pagina):
+    """Retira barras de seção que cruzam a medianiz antes de ler colunas."""
+    if not hasattr(pagina, 'extract_words') or not hasattr(pagina, 'filter'):
+        return pagina, 0.0
+    from ..pdf_texto import _agrupar_palavras_por_linha
+    bands, body_top = [], 0.0
+    for top, words in _agrupar_palavras_por_linha(pagina.extract_words(x_tolerance=2, y_tolerance=3)):
+        text = ' '.join(word['text'] for word in sorted(words, key=lambda word: word['x0']))
+        section = re.fullmatch(r'[-–— ]*CONHECIMENTOS\s+(GERAIS|B[ÁA]SICOS|COMPLEMENTARES|ESPEC[ÍI]FICOS)[-–— ]*', text)
+        spans = min(word['x0'] for word in words) < pagina.width / 2 < max(word['x1'] for word in words)
+        if section and spans and top < pagina.height * .35:
+            bottom = max(word['bottom'] for word in words)
+            bands.append((top - 1, bottom + 1))
+            body_top = max(body_top, bottom + 1)
+        elif top < pagina.height * .06 and re.match(r'^CEBRASPE\b', text) and re.search(r'(?i)edital', text):
+            bands.append((top - 1, max(word['bottom'] for word in words) + 1))
+    if bands:
+        pagina = pagina.filter(lambda obj: obj.get('object_type') != 'char'
+            or not any(top <= obj.get('top', -1) <= bottom for top, bottom in bands))
+    return pagina, body_top
+
+
 class TextoExtraido(str):
     def __new__(cls, texto, perfil='pdf_adaptativo_v2', avisos=(), paginas=()):
         obj = super().__new__(cls, texto)
@@ -46,7 +68,8 @@ class LeitorOCR:
             from rapidocr_onnxruntime import RapidOCR
             if self.motor is None:
                 self.motor = RapidOCR()
-            imagem=np.array(pagina.to_image(resolution=180).original.convert('RGB'))
+            from src.importador.pdf_render import render_page_image
+            imagem=np.array(render_page_image(pagina, resolution=180))
             deteccoes,_=self.motor(imagem)
             if not deteccoes:
                 return '', 'OCR não reconheceu texto nesta página.'
