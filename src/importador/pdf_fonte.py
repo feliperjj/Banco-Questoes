@@ -372,7 +372,12 @@ def _render_asset(pdf_path: Path, source_hash: str, page_no: int, bbox, asset_di
         asset_dir.mkdir(parents=True, exist_ok=True)
         key = f"{source_hash}-p{page_no}-{x0:.2f}-{top:.2f}-{x1:.2f}-{bottom:.2f}"
         digest = hashlib.sha256(key.encode()).hexdigest()[:16]
-        path = asset_dir / f"{prefix}-{digest}.png"
+        # Recursos antigos conservam o caminho/hash. Novos recortes usam WebP
+        # sem perdas, mantendo exatamente os pixels exigidos pela certificação.
+        from PIL import features
+        legacy = asset_dir / f"{prefix}-{digest}.png"
+        suffix = '.webp' if features.check('webp') else '.png'
+        path = legacy if legacy.is_file() else asset_dir / f"{prefix}-{digest}{suffix}"
         rendered = render_region(pdf_path, page_no, (x0, top, x1, bottom), scale=scale, output=path)
         return {"path": str(rendered.get("path", path)),
                 "sha256": rendered.get("sha256") or hashlib.sha256(path.read_bytes()).hexdigest(),

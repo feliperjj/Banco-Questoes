@@ -85,11 +85,19 @@ QLabel#file-status {
 QLabel#dashboard-section-title { color: #263d39; font-size: 12px; font-weight: 700; }
 QLabel#dashboard-hero-title { color: #ffffff; font-size: 16px; font-weight: 750; }
 QLabel#dashboard-hero-text { color: #d5ebe0; font-size: 10pt; }
-QLabel#exam-info { color: #365149; font-size: 13px; font-weight: 650; }
+QLabel#exam-info { color: #183b36; font-size: 18px; font-weight: 700; }
 QLabel#page-subtitle { color: #64756e; font-size: 10pt; }
 QLabel#section-title { color: #263d39; font-size: 13px; font-weight: 700; padding-top: 4px; }
 QLabel#section-kicker { color: #197565; font-size: 8pt; font-weight: 800; letter-spacing: 1px; }
 QLabel#section-hint { color: #657b71; font-size: 9pt; }
+QLabel#review-next-action {
+    color: #165d4c;
+    background: #e8f3ec;
+    border: 1px solid #c5ded0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+}
 QLabel#field-label { color: #506a60; font-size: 9pt; font-weight: 650; }
 QLabel#timer-label {
     color: #216e5b;
@@ -101,6 +109,22 @@ QLabel#timer-label {
     font-weight: 700;
 }
 QLabel#exam-progress-label, QLabel#review-progress-label { color: #64756e; font-size: 9pt; font-weight: 650; }
+QLabel#exam-answer-status {
+    color: #64756e;
+    background: #f1f5f3;
+    border: 1px solid #e1e9e5;
+    border-radius: 12px;
+    padding: 5px 12px;
+    font-size: 12px;
+}
+QLabel#exam-answer-status[answered="true"] {
+    color: #125e50;
+    background: #e5f3ed;
+    border-color: #b9dccc;
+    font-weight: 700;
+}
+QScrollArea#source-facsimile { background: #ffffff; border: none; }
+QWidget#source-paper { background: #ffffff; }
 QLabel#exam-question-kicker, QLabel#review-kicker { color: #197565; font-size: 9pt; font-weight: 800; letter-spacing: 1px; }
 QFrame#exam-question-card, QFrame#review-card {
     background: #ffffff;
@@ -129,7 +153,7 @@ QTextEdit#exam-context-text {
     padding: 14px 18px;
 }
 QFrame#exam-statement-block {
-    background: #fbfcfa;
+    background: #ffffff;
     border: 1px solid #dce7df;
     border-left: 4px solid #197565;
     border-radius: 10px;
@@ -174,7 +198,10 @@ QFrame#exam-option {
 }
 QFrame#exam-option { min-height: 48px; }
 QFrame#exam-option:hover { border-color: #8db9a8; background: #edf5ef; }
-QFrame#exam-option[selected="true"] { border: 2px solid #197565; background: #e8f3ec; }
+QFrame#exam-option[selected="true"] { border: 2px solid #197565; background: #e0f1e9; }
+QFrame#exam-option[selected="true"] QLabel#exam-option-label { color: #125e50; font-weight: 700; }
+QRadioButton#exam-option-toggle:focus { outline: none; }
+QRadioButton#exam-option-toggle::indicator:focus { border: 2px solid #183b36; }
 QRadioButton#exam-option-toggle { background: transparent; border: none; padding: 0; }
 QRadioButton#exam-option-toggle::indicator { width: 14px; height: 14px; border: 1px solid #799c90; border-radius: 8px; background: white; }
 QRadioButton#exam-option-toggle::indicator:checked { background: #197565; border-color: #197565; }

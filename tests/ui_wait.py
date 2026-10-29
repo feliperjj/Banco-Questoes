@@ -11,6 +11,7 @@ def wait_ui_jobs(timeout=15000):
         widgets = app.allWidgets()
         busy = any(job.running for widget in app.topLevelWidgets() for job in widget.findChildren(DatabaseTask))
         busy |= any(getattr(widget, '_availability_timer', None) and widget._availability_timer.isActive() for widget in widgets)
+        busy |= any(getattr(widget, 'crop_timer', None) and widget.crop_timer.isActive() for widget in widgets)
         if not busy:
             return
         sleep(0.01)

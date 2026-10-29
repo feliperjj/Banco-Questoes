@@ -5,6 +5,8 @@ tentativa continuam verificando as fontes atuais pela autoridade do domínio.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+import json
+from peewee import fn
 from src.db.models import (Questao, Alternativa, QuestaoVersao, DocumentoFonte,
                            EvidenciaQuestao, RevisaoConteudo, RevisaoGabarito,
                            ValidacaoAutomatica, ResolucaoDiagnostico)
@@ -13,21 +15,29 @@ _snapshot = ContextVar('eligibility_read_snapshot', default=None)
 
 
 @contextmanager
-def eligibility_read():
+def eligibility_read(question_ids=None):
+    """Pré-carrega apenas as questões solicitadas; None mantém a leitura global."""
     if _snapshot.get() is not None:
         yield
         return
-    latest_versions = {}
-    for version in QuestaoVersao.select().order_by(QuestaoVersao.questao, QuestaoVersao.numero_versao):
-        latest_versions[version.questao_id] = version
-    versions = list(latest_versions.values())
+    questions = Questao.select()
+    version_query = QuestaoVersao.select()
+    if question_ids is not None:
+        selected = tuple(dict.fromkeys(question_ids))
+        questions = questions.where(Questao.id.in_(selected))
+        version_query = version_query.where(QuestaoVersao.questao.in_(selected))
+    latest_numbers = (version_query.select(QuestaoVersao.questao,
+                      fn.MAX(QuestaoVersao.numero_versao).alias('latest_number'))
+                      .group_by(QuestaoVersao.questao).alias('latest_numbers'))
+    versions = list(QuestaoVersao.select().join(latest_numbers, on=(
+        (QuestaoVersao.questao == latest_numbers.c.questao_id)
+        & (QuestaoVersao.numero_versao == latest_numbers.c.latest_number))))
     ids = [v.id for v in versions]
     data = {'latest': {v.questao_id: v for v in versions},
             QuestaoVersao: {v.id: v for v in versions},
-            Questao: {v.id: v for v in Questao.select()},
-            DocumentoFonte: {v.id: v for v in DocumentoFonte.select()}}
+            Questao: {v.id: v for v in questions}}
     data[Alternativa] = {}
-    for row in Alternativa.select().order_by(Alternativa.letra):
+    for row in Alternativa.select().where(Alternativa.questao.in_(questions.select(Questao.id))).order_by(Alternativa.letra):
         data[Alternativa].setdefault(row.questao_id, []).append(row)
     for model in (EvidenciaQuestao, RevisaoConteudo, RevisaoGabarito,
                   ValidacaoAutomatica, ResolucaoDiagnostico):
@@ -36,8 +46,27 @@ def eligibility_read():
             groups[row.questao_versao_id].append(row)
         data[model] = groups
     data['evidence_ids'] = {row.id: row for group in data[EvidenciaQuestao].values() for row in group}
+    source_ids = {r.documento_fonte_id for r in data['evidence_ids'].values()}
+    source_ids.update(v.documento_fonte_id for v in versions if v.documento_fonte_id)
+    data[DocumentoFonte] = {s.id: s for s in DocumentoFonte.select().where(DocumentoFonte.id.in_(source_ids))}
     token = _snapshot.set(data)
     try:
+        from src.models.provenance_service import prefetch_integrity_files, potentially_eligible_version
+        potential = {v.id for v in versions if potentially_eligible_version(v)}
+        potential_questions = {v.questao_id for v in versions if v.id in potential}
+        paths = {q.imagem_path for q in data[Questao].values() if q.id in potential_questions and q.imagem_path}
+        for ident, rows in data[ValidacaoAutomatica].items():
+            if ident not in potential:
+                continue
+            for row in rows:
+                try:
+                    presentation = json.loads(row.manifesto_json or '{}').get('apresentacao') or {}
+                    for item in presentation.get('questao', []) + presentation.get('contexto', []):
+                        if isinstance(item, dict) and item.get('path'):
+                            paths.add(item['path'])
+                except (ValueError, TypeError, AttributeError):
+                    pass  # A autoridade ainda rejeita manifestos inválidos.
+        prefetch_integrity_files(paths)
         yield
     finally:
         _snapshot.reset(token)
@@ -64,7 +93,7 @@ def latest(question_id):
 
 def alternatives(question_id):
     data = _snapshot.get()
-    return data[Alternativa].get(question_id, []) if data is not None else None
+    return data[Alternativa].get(question_id, []) if data is not None and question_id in data[Questao] else None
 
 
 def evidence_ids(ids):

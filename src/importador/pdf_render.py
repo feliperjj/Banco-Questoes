@@ -140,7 +140,10 @@ def _work(payload):
                     if existing.size != image.size or hashlib.sha256(existing.convert("RGB").tobytes()).hexdigest() != result["pixels_sha256"]:
                         raise ValueError("Imagem existente diverge do original; não foi sobrescrita.")
             else:
-                image.save(output, format="PNG")
+                if output.suffix.lower() == '.webp':
+                    image.save(output, format='WEBP', lossless=True, method=4)
+                else:
+                    image.save(output, format="PNG")
             result["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
             result["path"] = str(output)
         return result

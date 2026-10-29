@@ -20,6 +20,33 @@ def _qapp():
     return QApplication.instance() or QApplication([])
 
 
+def test_resumo_respostas_acompanha_selecao_e_navegacao(monkeypatch):
+    _qapp()
+    pagina = ExecucaoProvaPage()
+    monkeypatch.setattr(pagina, '_salvar_progresso', lambda: None)
+    pagina.questoes = [
+        {'id': n, 'enunciado': f'Questão {n}', 'tipo': 'certo_errado'}
+        for n in (1, 2)
+    ]
+    pagina.barra_progresso.setRange(0, 2)
+    pagina.mostrar_questao_atual()
+    assert pagina.barra_progresso.value() == 0
+    pagina.grupo_botoes.buttons()[0].click()
+    assert pagina.lbl_resposta.text() == 'Resposta marcada: Certo'
+    assert pagina.lbl_respondidas.text() == '1 de 2 respondidas'
+    pagina.proxima_questao()
+    assert pagina.lbl_resposta.text() == 'Selecione uma resposta'
+    assert pagina.barra_progresso.value() == 1
+    pagina.questao_anterior()
+    assert pagina.grupo_botoes.buttons()[0].isChecked()
+    pagina.grupo_botoes.buttons()[1].click()
+    assert pagina.lbl_resposta.text() == 'Resposta marcada: Errado'
+    assert pagina.barra_progresso.value() == 1
+    pagina._mostrar_estado_inicial()
+    assert pagina.lbl_resposta.isHidden()
+    assert pagina.lbl_respondidas.text() == ''
+
+
 def test_execucao_limpa_estado_apos_finalizar_prova(tmp_path, monkeypatch):
     _qapp()
     init_db(str(tmp_path / "ui.db"))
@@ -137,7 +164,7 @@ def test_conferencia_da_fonte_cabe_nas_duas_dimensoes_planejadas(tmp_path):
             assert top_left.y() + widget.height() <= dialog.height()
         dialog.work_tabs.setCurrentIndex(0)
         _qapp().processEvents()
-        assert dialog.question_pdf.viewer.isVisible()
+        assert dialog.question_pdf.crop_view.isVisible()
         dialog.work_tabs.setCurrentIndex(1)
         _qapp().processEvents()
         assert dialog.extracted.isVisible()

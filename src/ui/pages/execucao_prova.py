@@ -35,7 +35,7 @@ class ExecucaoProvaPage(QWidget):
         self._starting = False
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(34, 28, 34, 28)
-        self.layout.setSpacing(16)
+        self.layout.setSpacing(12)
 
         header = QHBoxLayout()
         header.setSpacing(14)
@@ -46,15 +46,24 @@ class ExecucaoProvaPage(QWidget):
         header.addWidget(self.lbl_info, 1)
         self.lbl_tempo = QLabel("00:00")
         self.lbl_tempo.setObjectName("timer-label")
+        self.lbl_tempo.setToolTip("Tempo decorrido nesta prova")
         header.addWidget(self.lbl_tempo)
         self.layout.addLayout(header)
 
         self.lbl_progresso = QLabel("Questão 0 de 0")
         self.lbl_progresso.setObjectName("exam-progress-label")
-        self.layout.addWidget(self.lbl_progresso)
+        progress_row = QHBoxLayout()
+        progress_row.addWidget(self.lbl_progresso)
+        progress_row.addStretch()
+        self.lbl_respondidas = QLabel()
+        self.lbl_respondidas.setObjectName("exam-progress-label")
+        progress_row.addWidget(self.lbl_respondidas)
+        self.layout.addLayout(progress_row)
         self.barra_progresso = QProgressBar()
         self.barra_progresso.setObjectName("exam-progress")
         self.barra_progresso.setTextVisible(False)
+        self.barra_progresso.setFixedHeight(6)
+        self.barra_progresso.setAccessibleName("Questões respondidas")
         self.barra_progresso.setRange(0, 1)
         self.barra_progresso.setValue(0)
         self.layout.addWidget(self.barra_progresso)
@@ -67,7 +76,12 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_tipo_questao = QLabel("ENUNCIADO")
         self.lbl_tipo_questao.setObjectName("exam-question-kicker")
         self.lbl_tipo_questao.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        cartao_layout.addWidget(self.lbl_tipo_questao)
+        question_header = QHBoxLayout()
+        question_header.addWidget(self.lbl_tipo_questao, 1)
+        self.lbl_resposta = QLabel()
+        self.lbl_resposta.setObjectName("exam-answer-status")
+        question_header.addWidget(self.lbl_resposta)
+        cartao_layout.addLayout(question_header)
         self._context_sections = {}
         self._adicionar_secao_contexto(cartao_layout, "texto_apoio", "Texto de apoio")
         self._adicionar_secao_contexto(cartao_layout, "instrucoes_prova", "Instruções da prova")
@@ -100,6 +114,7 @@ class ExecucaoProvaPage(QWidget):
         self.original_view.hide()
         enunciado_layout.addWidget(self.original_view, 1)
         self.original_context_button = QToolButton()
+        self.original_context_button.setObjectName("exam-context-toggle")
         self.original_context_button.setText("Ler texto de apoio")
         self.original_context_button.setCheckable(True)
         self.original_context_button.hide()
@@ -248,6 +263,8 @@ class ExecucaoProvaPage(QWidget):
         self.lbl_enunciado.show()
         self.lbl_info.setText("Nenhuma prova em andamento")
         self.lbl_progresso.setText("Escolha uma prova para começar")
+        self.lbl_respondidas.clear()
+        self.lbl_resposta.hide()
         self.lbl_tipo_questao.setText("MODO PROVA")
         self.lbl_enunciado.setText("Suas questões aparecerão aqui quando você iniciar uma prova.")
         self._limpar_contexto()
@@ -325,7 +342,8 @@ class ExecucaoProvaPage(QWidget):
         q = self.questoes[self.idx_atual]
         numero = self.idx_atual + 1
         self.lbl_progresso.setText(f"Questão {numero} de {len(self.questoes)}")
-        self.barra_progresso.setValue(numero)
+        self._atualizar_resumo_respostas()
+        self.lbl_enunciado_titulo.setText("QUESTÃO")
         self.lbl_tipo_questao.setText((q.get("disciplina") or "QUESTÃO").upper())
         self._atualizar_contexto(q)
         self.lbl_enunciado.setPlainText(formatar_enunciado(q["enunciado"]))
@@ -377,6 +395,9 @@ class ExecucaoProvaPage(QWidget):
             option_layout.setSpacing(10)
             rb = QRadioButton()
             rb.setObjectName("exam-option-toggle")
+            rb.setAccessibleName(rotulo)
+            rb.setCursor(Qt.PointingHandCursor)
+            option_row.setCursor(Qt.PointingHandCursor)
             rb.setFixedWidth(22)
             rb.setMinimumHeight(18)
             rb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -522,7 +543,21 @@ class ExecucaoProvaPage(QWidget):
     def salvar_resposta_temp(self, checked, q_id, opcao):
         if checked:
             self.respostas_memoria[q_id] = opcao
+            self._atualizar_resumo_respostas()
             self._salvar_progresso()
+
+    def _atualizar_resumo_respostas(self):
+        total = len(self.questoes)
+        respondidas = sum(q['id'] in self.respostas_memoria for q in self.questoes)
+        self.lbl_respondidas.setText(f"{respondidas} de {total} respondidas")
+        self.lbl_respondidas.setToolTip(f"Questões sem resposta: {total - respondidas}")
+        self.barra_progresso.setValue(respondidas)
+        resposta = self.respostas_memoria.get(self.questoes[self.idx_atual]['id']) if total else None
+        self.lbl_resposta.setText(f"Resposta marcada: {resposta}" if resposta else "Selecione uma resposta")
+        self.lbl_resposta.setProperty("answered", resposta is not None)
+        self.lbl_resposta.style().unpolish(self.lbl_resposta)
+        self.lbl_resposta.style().polish(self.lbl_resposta)
+        self.lbl_resposta.setVisible(bool(total))
 
     def _salvar_progresso(self):
         repo.salvar_progresso(self.tentativa_id, self.respostas_memoria, self.idx_atual, self.tempo_gasto)

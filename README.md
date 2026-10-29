@@ -31,10 +31,13 @@ O objetivo não é fingir que todo PDF possui o mesmo formato. O objetivo é aut
 - Catálogo versionado de associações e diagnóstico não destrutivo de cobertura por arquivo.
 - Aplicação de gabarito e classificação por intervalos.
 - Edição e exclusão lógica de questões.
+- Revisão guiada das pendências da lista, com original e conteúdo salvo lado a lado, instruções por motivo e navegação entre questões.
+- Correção de um campo por vez e releitura assistida de um recorte do PDF, com nova versão pendente de conferência.
 - Busca por enunciado, disciplina, categoria, banca e tipo.
 - Geração de provas aleatórias em uma tela própria, com filtros e limite de tempo.
 - Lista separada de provas importadas, com indicação de gabarito pronto e acesso direto para resolvê-las na ordem original.
 - Fontes PDF identificadas por SHA-256, versões imutáveis de questões e registro separado de evidências e revisões de conteúdo/gabarito.
+- Novos recortes em WebP sem perdas, mantendo os pixels do original e a compatibilidade com recursos PNG existentes.
 - O funil apresenta etapa principal e todos os motivos, mantém conteúdo e gabarito como decisões independentes e exige evidência por parte antes de aprovar.
 - Novas provas usam versões liberadas pela política: revisão humana documentada ou verificação automática rastreável contra o PDF, com fonte íntegra, identidade, número, conteúdo, contexto, alternativas e gabarito conferidos. Preliminar, conflitante ou desconhecido não libera. A verificação automática fica identificada e não cria decisões humanas.
 - Execução com timer, alternativas responsivas e proteção contra finalização duplicada.
@@ -63,6 +66,12 @@ O caderno explica por que as decisões foram tomadas. O cérebro operacional dev
 7. Em **Gerar Prova**, monte simulados com questões aleatórias e filtros do banco.
 8. Em **Provas importadas**, escolha uma prova pronta para resolver a composição original.
 9. Resolva a prova e confira resultado, estatísticas e revisão.
+
+Para revisar pendências já salvas, abra **Questões**, ajuste a busca/filtro e clique em
+**Revisar pendências da lista**. Selecione o motivo, compare o recorte com o conteúdo
+salvo e registre as decisões em **Conteúdo e decisões**. **Corrigir somente este campo**
+permite reler o recorte e salvar uma correção sem importar toda a prova novamente.
+A página inteira continua acessível na aba **Página completa**.
 
 Se o gabarito puder ser colado manualmente:
 

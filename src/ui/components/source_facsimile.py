@@ -11,13 +11,15 @@ from src.config import ROOT_DIR
 class SourceFacsimile(QScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("source-facsimile")
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setMinimumHeight(120)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.surface = QWidget()
+        self.surface.setObjectName("source-paper")
         self.rows = QVBoxLayout(self.surface)
-        self.rows.setContentsMargins(4, 4, 4, 4)
+        self.rows.setContentsMargins(12, 12, 12, 12)
         self.rows.setSpacing(12)
         self.setWidget(self.surface)
         self.images = []
@@ -51,7 +53,7 @@ class SourceFacsimile(QScrollArea):
         from shiboken6 import isValid
         if not isValid(self):
             return
-        width = max(100, self.viewport().width() - 16)
+        width = max(1, self.viewport().width() - 24)
         for label, pixmap in self.images:
             scaled = pixmap.scaledToWidth(min(width, pixmap.width(), 800), Qt.SmoothTransformation)
             label.setPixmap(scaled)

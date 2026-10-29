@@ -140,7 +140,8 @@ def test_recurso_png_ou_crop_alterado_invalida_certificado(tmp_path):
 
 
 def test_reaplicar_lote_nao_recria_versao_para_contornar_rejeicao(tmp_path):
-    from src.config import DB_PATH, ROOT_DIR
+    from src.config import ROOT_DIR
+    from src.db.database import db
     from src.models.reparacao_service import apply_repair
     source, vid, cid, aid, manifest = _automatic_fixture(tmp_path)
     qid = QuestaoVersao.get_by_id(vid).questao_id
@@ -156,7 +157,7 @@ def test_reaplicar_lote_nao_recria_versao_para_contornar_rejeicao(tmp_path):
     path = tmp_path / "lote.json"
     path.write_text(json.dumps(proposal), encoding="utf-8")
     version_count = QuestaoVersao.select().where(QuestaoVersao.questao == qid).count()
-    result = apply_repair(path, db_path=DB_PATH)
+    result = apply_repair(path, db_path=db.database)
     assert result["reparadas"] == result["liberadas_automaticamente"] == 0
     assert result["pendencias"] == [{"questao_id": qid, "motivos": ["rejeicao_humana_do_mesmo_conteudo"]}]
     assert QuestaoVersao.select().where(QuestaoVersao.questao == qid).count() == version_count

@@ -96,11 +96,19 @@ criar_prova -> listar provas pendentes -> iniciar_tentativa
 - Ao finalizar: salvar tentativa, exibir resultado, limpar enunciado/alternativas/timer e voltar ao gerador.
 - Ao voltar à aba de execução sem tentativa ativa, não reutilizar conteúdo da prova anterior.
 - Questões ou alternativas longas devem quebrar linha e rolar dentro do cartão; nunca impor largura mínima maior que a tela.
+- No modo prova, a barra conta questões respondidas, enquanto o rótulo de posição indica a questão aberta. Trocar uma resposta não aumenta o total; navegar restaura a seleção e seu destaque. O resumo é limpo ao sair da tentativa.
 - Texto de apoio e instruções gerais aparecem em áreas próprias no modo prova e nunca devem ser concatenados ao enunciado.
 - A janela deve iniciar com o Dashboard selecionado e respeitar o mínimo de 960×640.
 - A tela de importação deve permanecer utilizável em 960×640, sem rolagem horizontal no formulário de revisão.
 - O botão `table-action-button` deve manter pelo menos 132 px de largura e 40 px reais de altura. A linha de prova usa 60 px e o seletor específico `QTableWidget#exam-table::item` não pode herdar padding vertical que comprima o widget.
 - Diálogos e mensagens visíveis ao usuário devem estar em português e explicar uma ação possível.
+- A revisão guiada usa a lista filtrada de questões, diagnostica em worker e navega sem transportar decisões, escopo ou justificativa da questão anterior. Reabrir a fila sempre reavalia a autoridade do domínio.
+- Correções parciais verificam a versão base dentro de transação, alteram apenas o campo selecionado e registram execução própria. A nova versão não herda decisões/certificado/apresentação automática da versão anterior. Tentativas existentes conservam seus snapshots.
+- A releitura assistida do recorte propõe texto sem gravar ou aprovar. Fonte ausente/alterada bloqueia a releitura e a aplicação da proposta. Sem texto extraível, a interface orienta correção manual; não presume sucesso por OCR.
+- O prefetch de elegibilidade aceita IDs e carrega apenas alternativas, versões e fontes relacionadas. A contagem filtrada usa lotes de até 250 e a fila usa até 100; leituras fora do escopo usam o banco normalmente. O snapshot termina com a leitura e nunca envolve gravações.
+- Listagem de provas e contagem usam um snapshot de arquivos por operação: hashes continuam reais; caminhos/metadados compartilhados são reaproveitados e reconferidos ao terminar. Mudança durante a leitura impede devolver a contagem. Nada persiste entre operações; criação/início de prova continuam revalidando sem esse snapshot de leitura.
+- Apenas versões com revisão humana suficiente ou certificado da regra atual precisam preparar recursos para elegibilidade. Essa triagem só pode descartar; a liberação continua vindo de `assess_version`. A pré-leitura de hashes usa até oito workers de I/O, sem SQLite/PDF/Qt nesses workers.
+- Novos recortes documentais usam WebP sem perdas quando Pillow oferece suporte; os pixels precisam coincidir com o original. PNGs já existentes são reutilizados sem trocar caminhos/hashes. A renderização PNG explícita e o fallback sem WebP permanecem disponíveis.
 - Botão de uma prova concluída deve ser um estado (`Concluída`), não um botão inativo que parece quebrado.
 
 ## 3. Pontos de risco conhecidos

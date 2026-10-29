@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
 
 from src.ui.components.question_editor import QuestionEditor
 from src.ui.components.question_source_review import QuestionSourceReviewDialog
+from src.ui.database_task import DatabaseTask
+from src.models.review_workflow import STAGE_LABELS
 from src.models.provenance_service import (
     begin_source_verification_batch, end_source_verification_batch,
 )
@@ -179,6 +181,10 @@ class QuestoesPage(QWidget):
         self.analyze_selected.setObjectName("secondary-button")
         self.analyze_selected.clicked.connect(self.abrir_analise_selecionada)
         analysis_row.addWidget(self.analyze_selected)
+        self.review_queue_task = DatabaseTask(self)
+        self.review_queue_button = QPushButton('Revisar pendências da lista')
+        self.review_queue_button.clicked.connect(self.abrir_fila_revisao)
+        analysis_row.addWidget(self.review_queue_button)
         layout.addLayout(analysis_row)
         self.tabela = QTableWidget(); self.tabela.setColumnCount(7); self.tabela.setHorizontalHeaderLabels(["ID", "Enunciado", "Disciplina", "Banca", "Ano", "Gabarito", "Funil / motivos"])
         self.tabela.setObjectName("question-bank-table"); self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.setSelectionBehavior(QTableWidget.SelectRows); self.tabela.setEditTriggers(QTableWidget.NoEditTriggers); self.tabela.setAlternatingRowColors(True); self.tabela.setShowGrid(False); self.tabela.verticalHeader().setVisible(False); self.tabela.verticalHeader().setDefaultSectionSize(48); self.tabela.doubleClicked.connect(self.abrir_edicao_questao)
@@ -194,6 +200,9 @@ class QuestoesPage(QWidget):
         self.carregar_dados()
 
     def carregar_dados(self):
+        if hasattr(self, 'review_queue_task'):
+            self.review_queue_task.invalidate()
+            self.review_queue_button.setEnabled(True)
         self._end_diagnostic_cache()
         self._diagnostic_generation += 1
         generation = self._diagnostic_generation
@@ -208,6 +217,7 @@ class QuestoesPage(QWidget):
         elif filtro == "structure":
             questoes = [q for q in questoes if problemas_estrutura(q)]
         elif isinstance(filtro, str) and filtro.startswith("funnel:"):
+            self.review_queue_button.setEnabled(False)
             self._diagnostic_stage = filtro.split(":", 1)[1]
             self._diagnostic_candidates = questoes
             self._diagnostic_matches = []
@@ -250,6 +260,7 @@ class QuestoesPage(QWidget):
             self._source_verification_token = None
 
     def _populate_table(self, questoes):
+        self.review_queue_button.setEnabled(True)
         self.contagem.setText(f"{len(questoes)} questões · clique duas vezes para editar")
         self.empty.setVisible(not questoes)
         self.tabela.setRowCount(len(questoes))
@@ -283,9 +294,34 @@ class QuestoesPage(QWidget):
         assessment = dados.get("_funnel_assessment") or repo.diagnosticar_questao(dados["id"])
         motivos = "; ".join(item["codigo"] for item in assessment["pendencias"])
         self.analysis_status.setText(
-            f"Etapa: {assessment['etapa_principal']} · "
+            f"{STAGE_LABELS.get(assessment['etapa_principal'], 'Conferência pendente')} · "
             f"{'liberada' if assessment['liberada'] else 'pendente'}"
             + (f" · Motivos: {motivos}" if motivos else " · sem pendências")
         )
         dialog = QuestionSourceReviewDialog(dados["id"], self)
         dialog.exec()
+        self.carregar_dados()
+
+    def abrir_fila_revisao(self):
+        ids = [self.tabela.item(row, 0).data(Qt.UserRole)['id'] for row in range(self.tabela.rowCount())]
+        if not ids:
+            self.analysis_status.setText('Não há questões nesta lista. Ajuste a busca ou os filtros.')
+            return
+        self.review_queue_button.setEnabled(False)
+        self.analysis_status.setText('Preparando a fila de pendências desta lista…')
+        self.review_queue_task.submit(lambda: repo.diagnosticar_fila(ids), self._fila_pronta, self._erro_fila)
+
+    def _fila_pronta(self, pending):
+        self.review_queue_button.setEnabled(True)
+        if not pending:
+            self.analysis_status.setText('Todas as questões desta lista estão liberadas.')
+            return
+        ids = [item['id'] for item in pending]
+        dialog = QuestionSourceReviewDialog(ids[0], self, question_ids=ids)
+        dialog.exec()
+        self.carregar_dados()
+        self.analysis_status.setText('Fila revisada. Os filtros foram atualizados com as decisões atuais.')
+
+    def _erro_fila(self, error):
+        self.review_queue_button.setEnabled(True)
+        self.analysis_status.setText(f'Não foi possível preparar a fila: {error}')

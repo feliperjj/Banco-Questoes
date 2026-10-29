@@ -46,11 +46,12 @@ def _verificar_fontes_em_lote(function):
     return wrapped
 
 
-def _elegibilidade_precarregada(function):
+def _fontes_para_leitura(function):
+    """Amortiza verificações de arquivos compartilhados sem cache entre operações."""
     @wraps(function)
     def wrapped(*args, **kwargs):
-        init_db()
-        with read_batch.eligibility_read():
+        from src.models.provenance_service import consistent_source_read
+        with consistent_source_read():
             return function(*args, **kwargs)
     return wrapped
 
@@ -280,8 +281,16 @@ def _filtros_para_query(query, filtros):
     return query
 
 
-def _questoes_elegiveis(filtros=None):
+def _questao_pode_ser_sorteada(questao, alternativas):
+    dados = {'enunciado': questao.enunciado, 'tipo': questao.tipo,
+             'gabarito': questao.gabarito, 'alternativas': alternativas}
+    return not problemas_estrutura(dados) and bool(_versao_liberada(questao.id))
+
+
+def _questoes_elegiveis(filtros=None, *, question_ids=None):
     query = _filtros_para_query(_questoes_avaliaveis_query(), filtros)
+    if question_ids is not None:
+        query = query.where(Questao.id.in_(question_ids))
     # Gabarito não basta para uma questão entrar em um simulado: registros
     # antigos também precisam ter estrutura utilizável.
     candidatos = list(Questao.select().where(Questao.id.in_(query)))
@@ -290,24 +299,48 @@ def _questoes_elegiveis(filtros=None):
         alternativas.setdefault(alternativa.questao_id, []).append(
             {"letra": alternativa.letra, "texto": alternativa.texto}
         )
-    validos = []
-    for questao in candidatos:
-        dados = {
-            "enunciado": questao.enunciado,
-            "tipo": questao.tipo,
-            "gabarito": questao.gabarito,
-            "alternativas": alternativas.get(questao.id, []),
-        }
-        if not problemas_estrutura(dados) and _versao_liberada(questao.id):
-            validos.append(questao.id)
+    validos = [q.id for q in candidatos if _questao_pode_ser_sorteada(q, alternativas.get(q.id, []))]
     return query.where(Questao.id.in_(validos))
 
 
 @_verificar_fontes_em_lote
-@_elegibilidade_precarregada
+@_fontes_para_leitura
 def contar_questoes_elegiveis(filtros=None):
     init_db()
-    return _questoes_elegiveis(filtros).count()
+    candidates = [q.id for q in _filtros_para_query(_questoes_avaliaveis_query(), filtros)]
+    total = 0
+    for offset in range(0, len(candidates), 250):
+        selected = candidates[offset:offset + 250]
+        with read_batch.eligibility_read(selected):
+            for ident in selected:
+                questao = read_batch.record(Questao, ident)
+                if not questao.ativa or questao.gabarito not in GABARITOS_AVALIAVEIS:
+                    continue
+                if any(value and getattr(questao, key) != value for key, value in (filtros or {}).items()
+                       if key in {'disciplina', 'tipo', 'banca', 'topico'}):
+                    continue
+                alternatives = [{'letra': a.letra, 'texto': a.texto} for a in read_batch.alternatives(ident)]
+                total += bool(_questao_pode_ser_sorteada(questao, alternatives))
+    return total
+
+
+@_verificar_fontes_em_lote
+def diagnosticar_fila(question_ids):
+    """Fila da seleção atual, sem gravar revisões ou certificados."""
+    init_db()
+    pending = []
+    selected = list(dict.fromkeys(question_ids))
+    # Lotes pequenos limitam o snapshot em memória e a lista de parâmetros SQL.
+    for offset in range(0, len(selected), 100):
+        with read_batch.eligibility_read(selected[offset:offset + 100]):
+            for ident in selected[offset:offset + 100]:
+                question = read_batch.record(Questao, ident)
+                if question.ativa:
+                    assessment = diagnosticar_questao(ident)
+                    if not assessment['liberada']:
+                        pending.append({'id': ident, 'numero_oficial': question.numero_oficial,
+                                        'assessment': assessment})
+    return pending
 
 
 def criar_prova(
@@ -391,7 +424,7 @@ def criar_prova_cadastrada(
 
 
 @_verificar_fontes_em_lote
-@_elegibilidade_precarregada
+@_fontes_para_leitura
 def listar_provas_cadastradas() -> list[dict]:
     """Lista provas de origem e indica se já podem gerar uma nova prova."""
     init_db()
@@ -424,15 +457,21 @@ def listar_provas_cadastradas() -> list[dict]:
         .group_by(ProvaCadastrada.id)
         .order_by(ProvaCadastrada.criada_em.desc())
     )
+    records = list(query)
+    if not records:
+        return []
+    links = {proof.id: [] for proof in records}
+    for proof_id, question_id in (ProvaCadastradaQuestao
+            .select(ProvaCadastradaQuestao.prova_cadastrada, ProvaCadastradaQuestao.questao)
+            .where(ProvaCadastradaQuestao.prova_cadastrada.in_(list(links))).tuples()):
+        links[proof_id].append(question_id)
+    selected = {ident for group in links.values() for ident in group}
+    with read_batch.eligibility_read(selected):
+        availability = {ident: bool(_versao_liberada(ident)) for ident in selected}
     provas = []
-    for prova in query:
+    for prova in records:
         qtd = int(prova.qtd_questoes or 0)
-        vinculadas = list(
-            ProvaCadastradaQuestao.select(ProvaCadastradaQuestao, QuestaoVersao)
-            .join(QuestaoVersao, JOIN.LEFT_OUTER)
-            .where(ProvaCadastradaQuestao.prova_cadastrada == prova.id)
-        )
-        qtd_avaliaveis = sum(bool(_versao_liberada(item.questao_id)) for item in vinculadas)
+        qtd_avaliaveis = sum(availability[ident] for ident in links[prova.id])
         provas.append(
             {
                 "id": prova.id,
@@ -451,7 +490,7 @@ def listar_provas_cadastradas() -> list[dict]:
 
 
 @_verificar_fontes_em_lote
-@_elegibilidade_precarregada
+@_fontes_para_leitura
 def listar_lotes_importados_sem_prova() -> list[dict]:
     """Recupera lotes antigos de importação que ainda não tinham vínculo de prova.
 
@@ -514,7 +553,8 @@ def listar_lotes_importados_sem_prova() -> list[dict]:
             data = criada_em.strftime("%d/%m/%Y") if criada_em else "lote antigo"
             partes_nome.append(f"Prova importada · {data}")
 
-        avaliaveis = sum(bool(_versao_liberada(q.id)) for q in questoes_lote)
+        with read_batch.eligibility_read(q.id for q in questoes_lote):
+            avaliaveis = sum(bool(_versao_liberada(q.id)) for q in questoes_lote)
         com_gabarito = sum(q.gabarito in GABARITOS_CONFIRMADOS for q in questoes_lote)
         questao_ids = [q.id for q in questoes_lote]
         lotes.append(

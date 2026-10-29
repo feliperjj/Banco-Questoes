@@ -4,13 +4,13 @@ from pathlib import Path
 import json
 import pdfplumber
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Qt, QTimer
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
     QComboBox, QDoubleSpinBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QSpinBox, QSplitter, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from src.db.models import (
@@ -19,9 +19,13 @@ from src.db.models import (
 )
 from src.models.provenance_service import (
     add_evidence, create_question_version, create_source, review_answer,
-    review_content, resolve_diagnostic,
+    review_content, resolve_diagnostic, verify_source,
 )
 from src.models import questoes_repo as repo
+from src.models.review_workflow import diagnostic_target, render_source_region, STAGE_LABELS
+from src.ui.components.field_correction import FieldCorrectionDialog
+from src.ui.components.evidence_crop import EvidenceCrop
+from src.ui.database_task import DatabaseTask
 
 
 class _PdfEvidencePane(QWidget):
@@ -32,6 +36,11 @@ class _PdfEvidencePane(QWidget):
         self.source_id = None
         self.source_path = None
         self.document = QPdfDocument(self)
+        self.crop_task = DatabaseTask(self)
+        self.crop_timer = QTimer(self)
+        self.crop_timer.setSingleShot(True)
+        self.crop_timer.setInterval(150)
+        self.crop_timer.timeout.connect(self._render_crop)
         layout = QVBoxLayout(self)
         header = QHBoxLayout()
         header.addWidget(QLabel(label), 1)
@@ -46,8 +55,24 @@ class _PdfEvidencePane(QWidget):
         self.page_spin.setRange(1, 1)
         self.page_spin.setPrefix("Página ")
         self.page_spin.valueChanged.connect(self._navigate)
-        layout.addWidget(self.page_spin, alignment=Qt.AlignLeft)
-        bounds = QHBoxLayout()
+        page_row = QHBoxLayout()
+        page_row.addWidget(self.page_spin)
+        self.zoom_out = QPushButton("−")
+        self.zoom_in = QPushButton("+")
+        self.zoom_out.clicked.connect(lambda: self._change_zoom(0.85))
+        self.zoom_in.clicked.connect(lambda: self._change_zoom(1.18))
+        page_row.addWidget(self.zoom_out)
+        page_row.addWidget(self.zoom_in)
+        self.bounds_toggle = QToolButton()
+        self.bounds_toggle.setText('Ajustar recorte')
+        self.bounds_toggle.setCheckable(True)
+        self.bounds_toggle.setObjectName('exam-context-toggle')
+        page_row.addWidget(self.bounds_toggle)
+        page_row.addStretch()
+        layout.addLayout(page_row)
+        self.bounds_panel = QWidget()
+        bounds = QHBoxLayout(self.bounds_panel)
+        bounds.setContentsMargins(0, 0, 0, 0)
         bounds.addWidget(QLabel("Recorte (pontos PDF):"))
         self.bounds = {}
         for name, label in (("x0", "x₀"), ("y0", "y₀"), ("x1", "x₁"), ("y1", "y₁")):
@@ -59,21 +84,39 @@ class _PdfEvidencePane(QWidget):
             control.setMaximumWidth(92)
             bounds.addWidget(control)
             self.bounds[name] = control
-        layout.addLayout(bounds)
-        zoom = QHBoxLayout()
-        zoom.addWidget(QLabel("Zoom"))
-        self.zoom_out = QPushButton("−")
-        self.zoom_in = QPushButton("+")
-        self.zoom_out.clicked.connect(lambda: self._change_zoom(0.85))
-        self.zoom_in.clicked.connect(lambda: self._change_zoom(1.18))
-        zoom.addWidget(self.zoom_out)
-        zoom.addWidget(self.zoom_in)
-        zoom.addStretch()
-        layout.addLayout(zoom)
+            control.valueChanged.connect(self._schedule_crop)
+        self.bounds_panel.hide()
+        self.bounds_toggle.toggled.connect(self.bounds_panel.setVisible)
+        layout.addWidget(self.bounds_panel)
         self.viewer = QPdfView()
         self.viewer.setDocument(self.document)
         self.viewer.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-        layout.addWidget(self.viewer, 1)
+        self.crop_view = EvidenceCrop()
+        self.view_tabs = QTabWidget()
+        self.view_tabs.addTab(self.crop_view, 'Recorte selecionado')
+        self.view_tabs.addTab(self.viewer, 'Página completa')
+        layout.addWidget(self.view_tabs, 1)
+
+    def _schedule_crop(self):
+        self.crop_task.invalidate()
+        self.crop_timer.start()
+
+    def clear_source(self):
+        self.crop_timer.stop()
+        self.crop_task.invalidate()
+        self.document.close()
+        self.source_id = None
+        self.source_path = None
+        self.crop_view.show_message('Selecione o PDF original para conferir o recorte.')
+
+    def _render_crop(self):
+        if self.source_id is None:
+            return
+        source, page = self.source_id, self.page_spin.value()
+        bounds = tuple(self.bounds[n].value() for n in ('x0', 'y0', 'x1', 'y1'))
+        self.crop_view.show_message('Preparando o recorte original…')
+        self.crop_task.submit(lambda: render_source_region(source, page, bounds),
+                              self.crop_view.load_image, self.crop_view.show_message)
 
     def open_pdf(self):
         path, _ = QFileDialog.getOpenFileName(self, "Selecionar documento-fonte", "", "PDF (*.pdf)")
@@ -87,7 +130,7 @@ class _PdfEvidencePane(QWidget):
     def load_path(self, path: str):
         if Path(path).suffix.lower() != ".pdf":
             raise ValueError("A primeira versão da conferência de páginas aceita somente PDF.")
-        self.document.close()
+        self.clear_source()
         self.document.load(path)
         if self.document.status() != QPdfDocument.Status.Ready:
             raise ValueError("Não foi possível abrir o PDF selecionado.")
@@ -112,6 +155,9 @@ class _PdfEvidencePane(QWidget):
             control.setValue(values[name])
 
     def _change_zoom(self, multiplier: float):
+        if self.view_tabs.currentIndex() == 0:
+            self.crop_view.change_zoom(multiplier)
+            return
         self.viewer.setZoomMode(QPdfView.ZoomMode.Custom)
         self.viewer.setZoomFactor(max(0.5, min(3.0, self.viewer.zoomFactor() * multiplier)))
 
@@ -145,7 +191,7 @@ class _PdfEvidencePane(QWidget):
 
 
 class QuestionSourceReviewDialog(QDialog):
-    def __init__(self, question_id: int, parent=None):
+    def __init__(self, question_id: int, parent=None, *, question_ids=None):
         super().__init__(parent)
         self.question_id = question_id
         self.version_id = None
@@ -154,12 +200,52 @@ class QuestionSourceReviewDialog(QDialog):
         self.setWindowTitle("Conferir questão com a fonte")
         self.resize(960, 640)
         layout = QVBoxLayout(self)
+        self.queue_ids = list(dict.fromkeys(question_ids or [question_id]))
+        if question_id not in self.queue_ids:
+            self.queue_ids.insert(0, question_id)
+        queue_row = QHBoxLayout()
+        self.queue_selector = QComboBox()
+        for position, ident in enumerate(self.queue_ids, 1):
+            self.queue_selector.addItem(f"{position} de {len(self.queue_ids)} · Questão ID {ident}", ident)
+        self.queue_selector.setCurrentIndex(self.queue_ids.index(question_id))
+        self.queue_previous = QPushButton('‹ Anterior')
+        self.queue_next = QPushButton('Próxima pendência ›')
+        for button in (self.queue_previous, self.queue_next):
+            button.setObjectName('secondary-button')
+        self.queue_previous.clicked.connect(lambda: self.queue_selector.setCurrentIndex(self.queue_selector.currentIndex() - 1))
+        self.queue_next.clicked.connect(lambda: self.queue_selector.setCurrentIndex(self.queue_selector.currentIndex() + 1))
+        queue_row.addWidget(self.queue_previous)
+        queue_row.addWidget(self.queue_selector, 1)
+        queue_row.addWidget(self.queue_next)
+        layout.addLayout(queue_row)
         self.version_label = QLabel()
+        self.version_label.setWordWrap(True)
         self.version_label.setObjectName("section-hint")
         layout.addWidget(self.version_label)
         self.version_selector = QComboBox()
         self.version_selector.currentIndexChanged.connect(self._load_selected_version)
         layout.addWidget(self.version_selector)
+        self.pending_selector = QComboBox()
+        self.pending_selector.setMinimumWidth(0)
+        self.pending_selector.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.pending_selector.setMinimumContentsLength(20)
+        self.pending_selector.currentIndexChanged.connect(self._select_pending)
+        layout.addWidget(self.pending_selector)
+        self.pending_action = QLabel()
+        self.pending_action.setObjectName('review-next-action')
+        self.pending_action.setWordWrap(True)
+        layout.addWidget(self.pending_action)
+        guided_actions = QHBoxLayout()
+        self.guide_button = QPushButton('Conferir esta pendência')
+        self.guide_button.setObjectName('secondary-button')
+        self.guide_button.clicked.connect(self._focus_pending)
+        self.correct_button = QPushButton('Corrigir somente este campo')
+        self.correct_button.setObjectName('secondary-button')
+        self.correct_button.clicked.connect(self._correct_field)
+        guided_actions.addWidget(self.guide_button)
+        guided_actions.addWidget(self.correct_button)
+        guided_actions.addStretch()
+        layout.addLayout(guided_actions)
 
         self.sources = QTabWidget()
         self.question_pdf = _PdfEvidencePane("Conteúdo da questão", "caderno_questoes", self.sources)
@@ -172,7 +258,18 @@ class QuestionSourceReviewDialog(QDialog):
         source_page = QWidget()
         source_layout = QVBoxLayout(source_page)
         source_layout.setContentsMargins(0, 0, 0, 0)
-        source_layout.addWidget(self.sources)
+        comparison = QSplitter(Qt.Horizontal)
+        comparison.setChildrenCollapsible(False)
+        comparison.addWidget(self.sources)
+        self.comparison_text = QPlainTextEdit()
+        self.comparison_text.setReadOnly(True)
+        self.comparison_text.setMinimumWidth(0)
+        self.comparison_text.setPlaceholderText('Conteúdo salvo para comparar com o original')
+        comparison.addWidget(self.comparison_text)
+        comparison.setStretchFactor(0, 3)
+        comparison.setStretchFactor(1, 2)
+        source_layout.addWidget(comparison)
+        self.comparison = comparison
         self.work_tabs.addTab(source_page, "Originais")
 
         self.extracted = QPlainTextEdit()
@@ -274,11 +371,85 @@ class QuestionSourceReviewDialog(QDialog):
         close.clicked.connect(self.accept)
         action_row.addStretch()
         action_row.addWidget(close)
-        layout.addLayout(alert_row)
+        self.alert_controls = QWidget()
+        self.alert_controls.setLayout(alert_row)
+        alert_row.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.alert_controls)
         layout.addLayout(action_row)
+        self.queue_selector.currentIndexChanged.connect(self._select_queue_question)
         self._load_current_question()
 
+    def _select_queue_question(self):
+        ident = self.queue_selector.currentData()
+        if ident is None:
+            return
+        self.question_id = ident
+        self.rationale.clear()
+        self._load_current_question()
+
+    def _select_pending(self):
+        item = self.pending_selector.currentData()
+        guidance = {
+            'conteudo_nao_conferido': 'Compare o enunciado, o contexto e as alternativas com o original. Registre a decisão em Conteúdo e decisões.',
+            'gabarito_nao_confirmado': 'Abra o gabarito definitivo, confira o número e a resposta e registre a decisão em Conteúdo e decisões.',
+            'numeracao_ausente': 'Localize o número impresso no original e use Corrigir somente este campo para registrá-lo.',
+        }
+        self.pending_action.setText(
+            guidance.get(item['codigo'], item.get('acao_necessaria') or item['mensagem'])
+            if item else 'Conferência concluída para esta versão. Você pode continuar pela fila.')
+        self.guide_button.setEnabled(item is not None)
+
+    def _focus_pending(self):
+        item = self.pending_selector.currentData()
+        if not item:
+            return
+        part = 'gabarito' if diagnostic_target(item) == 'gabarito' else 'conteudo'
+        self.work_tabs.setCurrentIndex(0)
+        self.sources.setCurrentIndex(1 if part == 'gabarito' else 0)
+        evidence = (EvidenciaQuestao.select().where(EvidenciaQuestao.questao_versao == self.version_id))
+        ref = next((r for r in evidence if r.id in item.get('evidencia_disponivel', [])), None)
+        if ref is None:
+            ref = next((r for r in evidence if r.parte == part), None)
+        if ref:
+            pane = self.answer_pdf if ref.parte == 'gabarito' else self.question_pdf
+            self.sources.setCurrentWidget(pane)
+            self._load_evidence(pane, ref)
+        index = self.alert_code.findData(item['codigo'])
+        if index >= 0:
+            self.alert_code.setCurrentIndex(index)
+
+    def _correct_field(self):
+        item = self.pending_selector.currentData()
+        field = diagnostic_target(item) if item else 'enunciado'
+        pane = self.answer_pdf if field == 'gabarito' else self.question_pdf
+        dialog = FieldCorrectionDialog(self.version_id, field, pane, self)
+        if dialog.exec():
+            self._load_current_question()
+
+    def _load_evidence(self, pane, evidence):
+        pane.clear_source()
+        source = DocumentoFonte.get_by_id(evidence.documento_fonte_id)
+        if not source.localizacao or not Path(source.localizacao).is_file():
+            pane.path_label.setText('Fonte indisponível. Localize o PDF original íntegro.')
+            return
+        if not verify_source(source.id)['integro']:
+            pane.path_label.setText('A fonte foi alterada. Localize o PDF original íntegro para conferir esta evidência.')
+            return
+        try:
+            pane.load_path(source.localizacao)
+            pane.page_spin.setValue(evidence.pagina or 1)
+            for name in ('x0', 'y0', 'x1', 'y1'):
+                value = getattr(evidence, name)
+                if value is not None:
+                    pane.bounds[name].setValue(value)
+            pane.viewer.pageNavigator().jump(pane.page_spin.value() - 1,
+                                             QPointF(evidence.x0 or 0, evidence.y0 or 0), 0)
+        except ValueError as error:
+            pane.path_label.setText(str(error))
+
     def _load_current_question(self):
+        self.queue_previous.setEnabled(self.queue_selector.currentIndex() > 0)
+        self.queue_next.setEnabled(self.queue_selector.currentIndex() < len(self.queue_ids) - 1)
         versions = list(QuestaoVersao.select().where(
             QuestaoVersao.questao == self.question_id
         ).order_by(QuestaoVersao.numero_versao))
@@ -307,15 +478,14 @@ class QuestionSourceReviewDialog(QDialog):
         self.add_answer_evidence.setEnabled(editable)
         self.content_button.setEnabled(editable)
         self.answer_button.setEnabled(editable)
+        self.correct_button.setEnabled(editable)
         self.version_label.setText(
             f"Questão ID {self.question_id} · versão {version.numero_versao} · "
             f"conteúdo: {version.revisao_conteudo} · gabarito: {version.revisao_gabarito}"
             + (" · somente leitura (versão histórica)" if not editable else "")
         )
         for pane in (self.question_pdf, self.answer_pdf):
-            pane.document.close()
-            pane.source_id = None
-            pane.source_path = None
+            pane.clear_source()
             pane.path_label.setText("Nenhum documento selecionado.")
             pane.page_spin.setRange(1, 1)
             for control in pane.bounds.values():
@@ -329,11 +499,19 @@ class QuestionSourceReviewDialog(QDialog):
                 rendered.append(f"{field.replace('_', ' ').title()}\n{text}")
         rendered.extend(f"Alternativa {a['letra']}\n{a['texto']}" for a in questao.get("alternativas", []))
         self.extracted.setPlainText("\n\n".join(rendered))
+        self.comparison_text.setPlainText(
+            f"Número oficial: {questao.get('numero_oficial') or 'não identificado'}\n\n"
+            + '\n\n'.join(rendered)
+            + f"\n\nGabarito salvo: {questao.get('gabarito') or 'não cadastrado'}")
         self.answer_label.setText(f"Gabarito estruturado (conferência): {questao.get('gabarito') or 'desconhecido'}")
         content_review = (RevisaoConteudo.select().where(RevisaoConteudo.questao_versao == version.id)
                           .order_by(RevisaoConteudo.id.desc()).first())
         answer_review = (RevisaoGabarito.select().where(RevisaoGabarito.questao_versao == version.id)
                          .order_by(RevisaoGabarito.id.desc()).first())
+        self.content_decision.setCurrentIndex(0)
+        self.answer_decision.setCurrentIndex(0)
+        self.answer_status.setCurrentIndex(0)
+        self._load_scope({})
         if content_review:
             content_index = self.content_decision.findData(content_review.decisao)
             if content_index >= 0:
@@ -358,44 +536,50 @@ class QuestionSourceReviewDialog(QDialog):
             if first_content:
                 scope = json.loads(first_content.escopo_json or "{}")
                 self._load_scope(scope)
-                source = DocumentoFonte.get_by_id(first_content.documento_fonte_id)
-                if source.localizacao and Path(source.localizacao).is_file():
-                    self.question_pdf.load_path(source.localizacao)
-                    self.question_pdf.page_spin.setValue(first_content.pagina or 1)
-                    for name, value in zip(("x0", "y0", "x1", "y1"),
-                                           (first_content.x0, first_content.y0, first_content.x1, first_content.y1)):
-                        if value is not None:
-                            self.question_pdf.bounds[name].setValue(value)
+                self._load_evidence(self.question_pdf, first_content)
             if first_answer:
                 self._load_scope(json.loads(first_answer.escopo_json or "{}"))
-                source = DocumentoFonte.get_by_id(first_answer.documento_fonte_id)
-                if source.localizacao and Path(source.localizacao).is_file():
-                    self.answer_pdf.load_path(source.localizacao)
-                    self.answer_pdf.page_spin.setValue(first_answer.pagina or 1)
-                    for name, value in zip(("x0", "y0", "x1", "y1"),
-                                           (first_answer.x0, first_answer.y0, first_answer.x1, first_answer.y1)):
-                        if value is not None:
-                            self.answer_pdf.bounds[name].setValue(value)
+                self._load_evidence(self.answer_pdf, first_answer)
         elif version.documento_fonte_id:
             source = DocumentoFonte.get_by_id(version.documento_fonte_id)
-            if source.localizacao and Path(source.localizacao).is_file():
-                self.question_pdf.load_path(source.localizacao)
+            if source.localizacao and Path(source.localizacao).is_file() and verify_source(source.id)['integro']:
+                try:
+                    self.question_pdf.load_path(source.localizacao)
+                except ValueError as error:
+                    self.question_pdf.path_label.setText(str(error))
+        self._focus_pending()
 
     def _refresh_assessment(self, version_id: int):
         from src.models.provenance_service import assess_version
         assessment = assess_version(version_id)
         self.diagnostic_label.setText(
-            f"Etapa: {assessment['etapa_principal']} · "
+            f"{STAGE_LABELS.get(assessment['etapa_principal'], 'Conferência pendente')} · "
             + ("Liberada" if assessment["liberada"] else "Pendente")
-            + "\n" + "\n".join(
-                f"• {item['codigo']}: {item['mensagem']}" for item in assessment["pendencias"]
-            )
+            + f" · {sum(p['severidade'] != 'informativo' for p in assessment['pendencias'])} pendências"
         )
+        self.diagnostic_label.setToolTip('\n'.join(f"{p['codigo']}: {p['mensagem']}" for p in assessment['pendencias']))
+        selected = (self.pending_selector.currentData() or {}).get('codigo')
+        self.pending_selector.blockSignals(True)
+        self.pending_selector.clear()
+        for item in assessment['pendencias']:
+            if item['severidade'] != 'informativo':
+                self.pending_selector.addItem(item['mensagem'], item)
+                if item['codigo'] == selected:
+                    self.pending_selector.setCurrentIndex(self.pending_selector.count() - 1)
+        self.pending_selector.blockSignals(False)
+        self._select_pending()
         self.alert_code.clear()
         for alert in assessment["alertas"]:
             if alert["natureza"] == "suspeita" and "resolucao" not in alert:
                 self.alert_code.addItem(f"{alert['codigo']} — {alert['mensagem']}", alert["codigo"])
-        self.resolve_alert_button.setEnabled(self.alert_code.count() > 0)
+        latest = repo.ultima_versao(self.question_id)
+        self.resolve_alert_button.setEnabled(self.alert_code.count() > 0 and latest.id == version_id)
+        self.alert_controls.setVisible(self.alert_code.count() > 0)
+
+    def done(self, result):
+        for pane in (self.question_pdf, self.answer_pdf):
+            pane.clear_source()
+        super().done(result)
     def _load_scope(self, scope: dict):
         self.proof_identity.setPlainText(str(scope.get("prova") or ""))
         self.scope_cargo.setPlainText(str(scope.get("cargo") or ""))

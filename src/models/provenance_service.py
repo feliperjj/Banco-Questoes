@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import stat as stat_module
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import re
-from contextvars import ContextVar, Token
+from contextvars import ContextVar, Token, copy_context
 from contextlib import contextmanager
 
 import pdfplumber
@@ -38,10 +40,99 @@ CONTENT_PARTS = {"conteudo", "contexto", "recurso_visual"}
 DIAGNOSTIC_RULE_VERSION = "funil-v2"
 AUTOMATIC_RULE_VERSION = "pdf-geometrico-v1"
 _source_verification_batch: ContextVar[dict | None] = ContextVar("source_verification_batch", default=None)
+_source_read_snapshot: ContextVar[dict | None] = ContextVar("source_read_snapshot", default=None)
 OBJECTIVE_STRUCTURE_PROBLEMS = {
     "Enunciado vazio", "Gabarito incompatível com o tipo da questão",
     "Alternativas ausentes ou com letras repetidas", "Alternativa do gabarito ausente",
 }
+
+
+def _read_file_stat(path):
+    try:
+        return path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
+def _file_stat(path):
+    snapshot = _source_read_snapshot.get()
+    if snapshot is None:
+        return _read_file_stat(path)
+    if path not in snapshot['stats']:
+        snapshot['stats'][path] = _read_file_stat(path)
+    return snapshot['stats'][path]
+
+
+def _is_file(path):
+    metadata = _file_stat(path)
+    return metadata is not None and stat_module.S_ISREG(metadata.st_mode)
+
+
+def _resolved_path(path):
+    snapshot = _source_read_snapshot.get()
+    if snapshot is None:
+        return path.resolve()
+    if path not in snapshot['paths']:
+        snapshot['paths'][path] = path.resolve()
+    return snapshot['paths'][path]
+
+
+def _stat_identity(metadata):
+    if metadata is None:
+        return None
+    return (metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_size,
+            metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+@contextmanager
+def consistent_source_read():
+    """Snapshot de arquivos apenas para listagens/contagens, validado ao terminar.
+
+    Cada arquivo ainda é verificado por hash nesta operação. Metadados e caminhos
+    compartilhados são consultados uma vez e conferidos antes de devolver o
+    resultado. Nada é reaproveitado em outra operação ou em uma gravação.
+    """
+    if _source_read_snapshot.get() is not None:
+        yield
+        return
+    snapshot = {'stats': {}, 'paths': {}, 'values': {}, 'io_pool': None}
+    token = _source_read_snapshot.set(snapshot)
+    try:
+        yield
+        for path, metadata in snapshot['stats'].items():
+            if _stat_identity(_read_file_stat(path)) != _stat_identity(metadata):
+                raise ValueError('Uma fonte ou imagem mudou durante a conferência. Atualize a lista para tentar novamente.')
+        for path, resolved in snapshot['paths'].items():
+            if path.resolve() != resolved:
+                raise ValueError('O caminho de uma fonte mudou durante a conferência. Atualize a lista.')
+    finally:
+        try:
+            if snapshot['io_pool'] is not None:
+                snapshot['io_pool'].shutdown(wait=True)
+        finally:
+            _source_read_snapshot.reset(token)
+
+
+def prefetch_integrity_files(paths):
+    """Amortiza I/O de imagens na leitura, mantendo hash real por operação."""
+    snapshot = _source_read_snapshot.get()
+    if snapshot is None or _source_verification_batch.get() is None:
+        return
+    resources = {_resource_path(value) for value in paths if value}
+    def prepare(path):
+        if _is_file(path):
+            _hash_file(path)
+    if len(resources) < 8:
+        for path in resources:
+            prepare(path)
+        return
+    # Cada contexto herda os mesmos dicionários desta leitura. Os workers fazem
+    # apenas I/O/hash; não acessam conexão SQLite nem objetos PDF/Qt.
+    if snapshot['io_pool'] is None:
+        snapshot['io_pool'] = ThreadPoolExecutor(max_workers=8)
+    futures = [snapshot['io_pool'].submit(copy_context().run, prepare, path) for path in resources]
+    for future in futures:
+        future.result()
 
 
 def _canonical_json(data: dict) -> str:
@@ -87,11 +178,11 @@ def verify_source(source_id: int) -> dict:
     """Compara o arquivo atual com o SHA-256 registrado, sem alterar o estado."""
     source = read_batch.record(DocumentoFonte, source_id)
     path = Path(source.localizacao).expanduser() if source.localizacao else None
-    if path is None or not path.is_file():
+    if path is None or not _is_file(path):
         return {"disponivel": False, "integro": False, "motivo": "arquivo_ausente"}
     cache = _source_verification_batch.get()
-    stat = path.stat()
-    cache_key = (source.id, str(path.resolve()), stat.st_size, stat.st_mtime_ns, source.sha256)
+    stat = _file_stat(path)
+    cache_key = (source.id, str(_resolved_path(path)), _stat_identity(stat), source.sha256)
     if cache is not None and cache_key in cache:
         return dict(cache[cache_key])
     actual = _digest_bytes(path.read_bytes())
@@ -128,13 +219,15 @@ def end_source_verification_batch(token: Token) -> None:
 @contextmanager
 def source_pdf(path):
     """Reutiliza a leitura de até quatro PDFs somente durante um lote."""
-    path = Path(path).resolve()
+    path = _resolved_path(Path(path))
     cache = _source_verification_batch.get()
     if cache is None:
         with pdfplumber.open(path) as document:
             yield document
         return
-    stat = path.stat()
+    stat = _file_stat(path)
+    if stat is None:
+        raise FileNotFoundError(f'Documento-fonte indisponível: {path}')
     key = ("pdf_document", str(path), stat.st_size, stat.st_mtime_ns)
     if key not in cache:
         pdf_keys = [entry for entry in cache if entry[0] == "pdf_document"]
@@ -145,17 +238,23 @@ def source_pdf(path):
 
 
 def _current_content(questao: Questao) -> dict:
+    snapshot = _source_read_snapshot.get()
+    key = ('current_content', questao.id)
+    if snapshot is not None and key in snapshot['values']:
+        return snapshot['values'][key]
     data = {name: getattr(questao, name) for name in (
         "numero_oficial", "enunciado", "texto_apoio", "tipo", "disciplina", "topico", "banca", "ano",
         "cargo", "orgao", "dificuldade", "gabarito", "comentario", "imagem_path",
     )}
     image_path = _resource_path(data.get("imagem_path"))
     if data.get("imagem_path"):
-        data["imagem_sha256"] = _hash_file(image_path) if image_path and image_path.is_file() else None
+        data["imagem_sha256"] = _hash_file(image_path) if image_path and _is_file(image_path) else None
     data["alternativas"] = [
         {"letra": alt.letra, "texto": alt.texto}
         for alt in (read_batch.alternatives(questao.id) if read_batch.alternatives(questao.id) is not None else Alternativa.select().where(Alternativa.questao == questao.id).order_by(Alternativa.letra))
     ]
+    if snapshot is not None:
+        snapshot['values'][key] = data
     return data
 
 
@@ -166,13 +265,18 @@ def _resource_path(value: str | None) -> Path | None:
     if path.is_absolute():
         return path
     root = TEST_ROOT or ROOT_DIR
-    return (root / path).resolve()
+    return _resolved_path(root / path)
 
 
 def _hash_file(path: Path) -> str:
     cache = _source_verification_batch.get()
-    stat = path.stat()
-    key = ("file_sha256", str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    stat = _file_stat(path)
+    if stat is None:
+        raise FileNotFoundError(f'Arquivo indisponível: {path}')
+    # Este caminho é apenas uma chave de cache, não uma decisão de escopo.
+    # stat inclui a identidade física; resolver symlinks para cada PNG repetia
+    # milhares de consultas ao Windows sem acrescentar uma verificação de hash.
+    key = ("file_sha256", str(path.absolute()), _stat_identity(stat))
     if cache is not None and key in cache:
         return cache[key]
     digest = hashlib.sha256()
@@ -227,27 +331,34 @@ def _verify_automatic_identity(manifest: dict, refs: list[EvidenciaQuestao], tex
         if identity.get("catalogo_sha256") != _hash_file(config_path):
             raise ValueError("catalogo_alterado")
         from src.importador.catalogo import carregar_catalogo, normalizar_chave
-        catalog = carregar_catalogo(config_path)
+        snapshot = _source_read_snapshot.get()
+        catalog_key = ('catalog', identity.get('catalogo_sha256'))
+        if snapshot is not None and catalog_key in snapshot['values']:
+            catalog = snapshot['values'][catalog_key]
+        else:
+            catalog = carregar_catalogo(config_path)
+            if snapshot is not None:
+                snapshot['values'][catalog_key] = catalog
         entry = catalog.get(normalizar_chave(key))
         if not entry or entry.get("confirmado") is not True:
             raise ValueError("associacao_catalogo_nao_confirmada")
-        sample_root = (ROOT_DIR / "samples").resolve()
-        book = (sample_root / key).resolve()
+        sample_root = _resolved_path(ROOT_DIR / "samples")
+        book = _resolved_path(sample_root / key)
         if not book.is_relative_to(sample_root):
             raise ValueError("caminho_catalogo_invalido")
-        allowed_answers = {(sample_root / entry["gabarito"]).resolve()}
+        allowed_answers = {_resolved_path(sample_root / entry["gabarito"])}
         if entry.get("complemento"):
-            allowed_answers.add((sample_root / entry["complemento"]).resolve())
+            allowed_answers.add(_resolved_path(sample_root / entry["complemento"]))
         for ref in refs:
             source = read_batch.record(DocumentoFonte, ref.documento_fonte_id)
-            path = Path(source.localizacao).resolve()
+            path = _resolved_path(Path(source.localizacao))
             role = "gabarito" if ref.parte == "gabarito" else "caderno"
             declared = (identity.get("equivalencia_documental") or {}).get(role)
             allowed = allowed_answers if role == "gabarito" else {book}
             if declared is not None:
                 from src.importador.comparacao_fontes import comparar_documentos
                 if declared.get("sha256_fonte") != source.sha256 or not any(
-                        reference.is_file() and comparar_documentos(path, reference) == declared for reference in allowed):
+                        _is_file(reference) and comparar_documentos(path, reference) == declared for reference in allowed):
                     raise ValueError("equivalencia_documental_nao_comprovada")
             elif path not in allowed:
                 raise ValueError("fonte_diverge_do_catalogo")
@@ -669,7 +780,7 @@ def record_automatic_validation(version_id: int, *, evidence_ids: list[int], man
     evidence_by_id = {ref.id: ref for ref in refs}
     for item in facsimile_items:
         path = _resource_path(item["path"])
-        if not path or not path.is_file() or _hash_file(path) != item["sha256"]:
+        if not path or not _is_file(path) or _hash_file(path) != item["sha256"]:
             raise ValueError("Recurso do fac-símile ausente ou alterado.")
         _verify_facsimile_pixels(item, evidence_by_id)
     _verify_source_claims(manifest, refs, version)
@@ -746,7 +857,7 @@ def get_automatic_validation(version_id: int) -> dict:
                 raise ValueError("gabarito_nao_libera")
             for item in (manifest.get("apresentacao", {}).get("questao", []) + manifest.get("apresentacao", {}).get("contexto", [])):
                 path = _resource_path(item.get("path"))
-                if not path or not path.is_file() or _hash_file(path) != item.get("sha256"):
+                if not path or not _is_file(path) or _hash_file(path) != item.get("sha256"):
                     raise ValueError("recurso_facsimile_alterado")
             result.update({"valida": True, "manifesto": manifest, "registro_id": row.id})
             if manifest.get("escopo", {}).get("situacao_gabarito") == "documento_fornecido":
@@ -768,8 +879,15 @@ def _diagnostic(code: str, stage: str, severity: str, nature: str, message: str,
 
 
 def _version_is_current(version: QuestaoVersao) -> bool:
+    snapshot = _source_read_snapshot.get()
+    key = ('version_current', version.id, version.hash_conteudo)
+    if snapshot is not None and key in snapshot['values']:
+        return snapshot['values'][key]
     current = _current_content(read_batch.record(Questao, version.questao_id))
-    return _version_content_matches(version, current)
+    result = _version_content_matches(version, current)
+    if snapshot is not None:
+        snapshot['values'][key] = result
+    return result
 
 
 def _version_content_matches(version: QuestaoVersao, current: dict) -> bool:
@@ -998,7 +1116,7 @@ def assess_version(version_id: int) -> dict:
                 evidence=content_ids + answer_ids, action="Selecione evidências do mesmo escopo documental."))
     if content.get("imagem_path"):
         resource = _resource_path(content["imagem_path"])
-        if not resource or not resource.is_file():
+        if not resource or not _is_file(resource):
             diagnostics.append(_diagnostic("recurso_visual_ausente", "estrutura", "bloqueio", "objetiva",
                 "O recurso visual referenciado não está disponível.", part="recurso_visual",
                 action="Restaure a imagem derivada do original e registre sua origem."))
@@ -1151,5 +1269,25 @@ def resolve_diagnostic(
         ).id
 
 
+def potentially_eligible_version(version: QuestaoVersao) -> bool:
+    """Descarta pendências inequívocas antes do I/O; nunca concede liberação."""
+    content_review = read_batch.review(RevisaoConteudo, version.id, by_date=True)
+    answer_review = read_batch.review(RevisaoGabarito, version.id, by_date=True)
+    if ((content_review and content_review.decisao == 'rejeitado')
+            or (answer_review and answer_review.decisao in {'conflitante', 'anulado'})):
+        return False
+    if (content_review and content_review.decisao == 'conferido'
+            and answer_review and answer_review.decisao == 'definitivo_confirmado'):
+        return True
+    rows = read_batch.version_rows(ValidacaoAutomatica, version.id)
+    if rows is None:
+        return ValidacaoAutomatica.select().where(
+            (ValidacaoAutomatica.questao_versao == version.id)
+            & (ValidacaoAutomatica.versao_regra == AUTOMATIC_RULE_VERSION)).exists()
+    return any(row.versao_regra == AUTOMATIC_RULE_VERSION for row in rows)
+
+
 def version_is_eligible(version: QuestaoVersao) -> bool:
+    if not potentially_eligible_version(version):
+        return False
     return bool(assess_version(version.id)["liberada"])
