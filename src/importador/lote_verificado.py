@@ -401,6 +401,7 @@ def salvar_lote_verificado(questoes: list[dict], *, caminho_caderno: str,
         begin_source_verification_batch,
         add_evidence, create_source,
         end_source_verification_batch, record_automatic_validation,
+        preliminary_allowed_for_study,
     )
 
     init_db()
@@ -474,6 +475,9 @@ def salvar_lote_verificado(questoes: list[dict], *, caminho_caderno: str,
     requested = {"codigo": _normalizar(codigo_gabarito), "cargo": _normalizar(cargo_gabarito),
                  "versao": normalizar_versao(versao_gabarito)}
     answer_hash = _hash(answer) if pdf_pair else None
+    preliminary_allowed = (answer_status == "preliminar" and preliminary_allowed_for_study(
+        catalog_identity.get("catalogo_chave") if isinstance(catalog_identity, dict) else None,
+        destination_key, answer_hash))
     metadata["parameters"] = {**metadata["parameters"],
         "fonte_gabarito": str(answer) if answer else None,
         "hash_fonte_gabarito": answer_hash,
@@ -662,7 +666,7 @@ def salvar_lote_verificado(questoes: list[dict], *, caminho_caderno: str,
                     "apresentacao": {"modo": "facsimile", "questao": facsimile_question,
                                      "contexto": context_images},
                     "verificador": {"metodo": "ancora_geometrica_conteudo_e_gabarito", "versao": "importacao-dois-funis-v1"}}
-                if status in {"preliminar", "anulado"} or not facsimile_question:
+                if (status == "preliminar" and not preliminary_allowed) or status == "anulado" or not facsimile_question:
                     result["pendentes"].append({"numero": number, "motivo": "gabarito_sem_status_liberavel_ou_facsimile"})
                     continue
                 try:

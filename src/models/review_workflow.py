@@ -79,6 +79,68 @@ def read_source_region(source_id, page_number, bounds):
             'page': page_number, 'bounds': list(bounds)}
 
 
+def _local_review_source(version_id, source_id):
+    """Snapshot da versão e da fonte; consulta não registra aprovações."""
+    from src.models.provenance_service import _version_is_current
+    version = QuestaoVersao.get_by_id(version_id)
+    latest = repo.ultima_versao(version.questao_id)
+    if latest.id != version_id or not _version_is_current(version) or not repo.obter_questao(version.questao_id)['ativa']:
+        raise ValueError('A questão mudou. Atualize a conferência antes de analisar.')
+    if version.documento_fonte_id != source_id:
+        raise ValueError('Selecione a fonte de conteúdo vinculada a esta versão.')
+    source = DocumentoFonte.get_by_id(source_id)
+    if not verify_source(source_id)['integro']:
+        raise ValueError('A fonte está ausente ou alterada. Reabra o original íntegro.')
+    return version, source
+
+
+def suggest_source_region(version_id, field, source_id, page_number, bounds, *,
+                          letter=None, cancel_event=None, runtime=None, cache_dir=None):
+    """Assistência local para conteúdo; a aplicação continua sendo uma ação humana."""
+    if field not in {'enunciado', 'texto_apoio', 'alternativas'}:
+        raise ValueError('A IA auxilia a transcrição de conteúdo. Número e gabarito exigem conferência explícita da fonte.')
+    version, source = _local_review_source(version_id, source_id)
+    content = json.loads(version.conteudo_json)
+    if field == 'alternativas':
+        matches = [a for a in content.get('alternativas', []) if a['letra'] == letter]
+        if len(matches) != 1:
+            raise ValueError('Selecione uma alternativa existente nesta questão.')
+        current_text = matches[0]['texto']
+    else:
+        if letter is not None:
+            raise ValueError('Selecione o recorte do campo de texto, sem alternativa.')
+        current_text = content.get(field) or ''
+    from src.importador.ia_revisao import analyze_region
+    result = analyze_region(source.localizacao, page_number, bounds, current_text,
+        letter=letter, expected_sha256=source.sha256, cancel_event=cancel_event,
+        runtime=runtime, cache_dir=cache_dir)
+    _local_review_source(version_id, source_id)
+    evidence = result.pop('region')
+    result['evidence'] = evidence
+    result['region'] = {'source_id': source_id, 'sha256': source.sha256,
+                        'page': page_number, 'bounds': evidence['bounds']}
+    result.update(version_id=version_id, field=field, letter=letter)
+    return result
+
+
+def remember_local_example(version_id, evidence, text, reviewer, confirmed, *, found=True):
+    """Só a confirmação explícita de uma pessoa transforma um recorte em label."""
+    version, source = _local_review_source(version_id, evidence['source_id'])
+    if source.sha256 != evidence['source_sha256']:
+        raise ValueError('A fonte mudou. Releia o original antes de guardar o exemplo.')
+    from src.db.models import ProvaCadastradaQuestao
+    proof_ids = sorted({item.prova_cadastrada_id for item in ProvaCadastradaQuestao.select().where(
+        ProvaCadastradaQuestao.questao_id == version.questao_id)})
+    if len(proof_ids) > 1:
+        raise ValueError('A questão pertence a mais de uma prova. Defina um grupo comum na preparação do dataset antes de incluí-la.')
+    group_id = f'prova-{proof_ids[0]}' if proof_ids else f'fonte-{source.sha256}'
+    from src.models.ia_dataset import record_reviewed_example
+    return record_reviewed_example(image_bytes=evidence['image_bytes'],
+        source_sha256=source.sha256, group_id=group_id,
+        page=evidence['page'], bounds=evidence['bounds'], text=text,
+        reviewer=reviewer, confirmed=confirmed, found=found)
+
+
 def apply_field_correction(version_id, field, value, *, region=None):
     """Edita um campo da versão atual dentro de transação, sem herdar decisões."""
     init_db()

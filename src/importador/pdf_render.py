@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import subprocess
 import sys
+import time
 from contextvars import ContextVar
 from functools import lru_cache, wraps
 
@@ -39,10 +40,17 @@ def rendering_batch(function):
     return wrapped
 
 
-def render_region(path, page, bbox, *, scale=2.0, output=None):
+def render_region(path, page, bbox, *, scale=2.0, output=None, cancel_event=None):
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError('Renderização cancelada.')
     payload = {"path": str(Path(path).resolve()), "page": int(page), "bbox": list(bbox), "scale": float(scale),
                "output": str(Path(output).resolve()) if output else None}
     holder = _batch.get()
+    if holder is None and cancel_event is not None:
+        @rendering_batch
+        def cancellable():
+            return render_region(path, page, bbox, scale=scale, output=output, cancel_event=cancel_event)
+        return cancellable()
     if holder is not None:
         if holder[0] is None:
             holder[0] = subprocess.Popen([sys.executable, "-m", "src.importador.pdf_render", "--server"],
@@ -57,14 +65,24 @@ def render_region(path, page, bbox, *, scale=2.0, output=None):
             process.stdin.flush()
             response = queue.Queue()
             threading.Thread(target=lambda: response.put(process.stdout.readline()), daemon=True).start()
-            try:
-                line = response.get(timeout=60)
-            except queue.Empty as error:
-                process.terminate()
-                raise ValueError("Tempo excedido na renderização isolada.") from error
+            deadline = time.monotonic() + 60
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    process.terminate()
+                    raise InterruptedError('Renderização cancelada.')
+                if time.monotonic() >= deadline:
+                    process.terminate()
+                    raise ValueError('Tempo excedido na renderização isolada.')
+                try:
+                    line = response.get(timeout=.1)
+                    break
+                except queue.Empty:
+                    continue
             if not line:
                 raise ValueError("O processo de renderização encerrou sem resposta.")
             reply = json.loads(line)
+        except InterruptedError:
+            raise
         except (OSError, EOFError, BrokenPipeError) as error:
             raise ValueError("O processo de renderização foi interrompido.") from error
         if "error" in reply:
@@ -81,7 +99,7 @@ def render_region(path, page, bbox, *, scale=2.0, output=None):
         raise ValueError("Resposta inválida do processo de renderização.") from error
 
 
-def render_image(path, page, bbox, *, scale=2.0):
+def render_image(path, page, bbox, *, scale=2.0, cancel_event=None):
     """Carrega o recorte isolado sem inicializar PDFium no processo da UI."""
     from PIL import Image
     from uuid import uuid4
@@ -90,7 +108,8 @@ def render_image(path, page, bbox, *, scale=2.0):
     staging.mkdir(parents=True, exist_ok=True)
     target = staging / f"{uuid4().hex}.png"
     try:
-        render_region(path, page, bbox, scale=scale, output=target)
+        options = {'cancel_event': cancel_event} if cancel_event is not None else {}
+        render_region(path, page, bbox, scale=scale, output=target, **options)
         with Image.open(target) as image:
             return image.convert("RGB").copy()
     finally:

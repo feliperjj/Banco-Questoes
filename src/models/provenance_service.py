@@ -389,6 +389,84 @@ def _verify_automatic_identity(manifest: dict, refs: list[EvidenciaQuestao], tex
         _verify_automatic_identity(manifest, refs, docs)
 
 
+def _study_policy_entries() -> dict:
+    """Read the independent, fail-closed allowlist for study certificates."""
+    path = ROOT_DIR / "config" / "gabaritos_estudo.json"
+    if not _is_file(path):
+        return {}
+    snapshot = _source_read_snapshot.get()
+    digest = _hash_file(path)
+    cache_key = ("gabaritos_estudo", digest)
+    if snapshot is not None and cache_key in snapshot["values"]:
+        return snapshot["values"][cache_key]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rows = payload.get("fontes") if isinstance(payload, dict) and payload.get("versao") == 1 else None
+        result = {}
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict) or row.get("aceitar_preliminar_para_estudo") is not True:
+                    continue
+                key = str(row.get("catalogo_chave") or "").strip().replace("\\", "/").removeprefix("./").casefold()
+                book = str(row.get("caderno_sha256") or "").strip().casefold()
+                answer = str(row.get("gabarito_sha256") or "").strip().casefold()
+                if key and re.fullmatch(r"[0-9a-f]{64}", book) and re.fullmatch(r"[0-9a-f]{64}", answer):
+                    result[(key, book, answer)] = True
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        result = {}
+    if snapshot is not None:
+        snapshot["values"][cache_key] = result
+    return result
+
+
+def _preliminary_allowed_for_refs(manifest: dict, refs: list[EvidenciaQuestao]) -> bool:
+    """Require a confirmed catalog binding and hashes of the actual evidence files."""
+    identity = manifest.get("identidade") or {}
+    key = str(identity.get("catalogo_chave") or "").strip()
+    if not key:
+        return False
+    # This is deliberately performed against the real evidence rows, rather
+    # than trusting hashes or paths supplied in the manifest JSON.
+    _verify_automatic_identity(manifest, refs)
+    books = {ref.documento_fonte_id for ref in refs if ref.parte == "conteudo"}
+    answers = {ref.documento_fonte_id for ref in refs if ref.parte == "gabarito"}
+    if len(books) != 1 or len(answers) != 1:
+        return False
+    book_source = read_batch.record(DocumentoFonte, next(iter(books)))
+    answer_source = read_batch.record(DocumentoFonte, next(iter(answers)))
+    if not book_source or not answer_source or not book_source.localizacao or not answer_source.localizacao:
+        return False
+    book_hash = (book_source.sha256 or _hash_file(_resource_path(book_source.localizacao))).casefold()
+    answer_hash = (answer_source.sha256 or _hash_file(_resource_path(answer_source.localizacao))).casefold()
+    normalized_key = key.replace("\\", "/").removeprefix("./").casefold()
+    return bool(_study_policy_entries().get((normalized_key, book_hash, answer_hash)))
+
+
+def preliminary_allowed_for_study(catalog_key: str, book_sha: str, answer_sha: str) -> bool:
+    """Public exact-match helper, anchored to the confirmed real catalog files."""
+    key = str(catalog_key or "").replace("\\", "/").removeprefix("./").casefold()
+    try:
+        from src.importador.catalogo import carregar_catalogo, normalizar_chave
+        sample_root = ROOT_DIR / "samples"
+        catalog = carregar_catalogo(ROOT_DIR / "config" / "gabaritos.json")
+        entry = catalog.get(normalizar_chave(key))
+        if not entry or entry.get("confirmado") is not True:
+            return False
+        book = (sample_root / key).resolve()
+        answers = [(sample_root / str(entry["gabarito"])).resolve()]
+        if entry.get("complemento"):
+            answers.append((sample_root / str(entry["complemento"])).resolve())
+        if not book.is_relative_to(sample_root.resolve()) or not _is_file(book):
+            return False
+        actual_book = _hash_file(book).casefold()
+        actual_answers = {_hash_file(path).casefold() for path in answers if path.is_relative_to(sample_root.resolve()) and _is_file(path)}
+        return (actual_book == str(book_sha or "").casefold()
+                and str(answer_sha or "").casefold() in actual_answers
+                and bool(_study_policy_entries().get((key, actual_book, str(answer_sha or "").casefold()))))
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
+
+
 def _verify_source_claims(manifest: dict, refs: list[EvidenciaQuestao], version: QuestaoVersao) -> None:
     """Confirma número, enunciado, alternativas e gabarito no texto PDF real."""
     try:
@@ -767,7 +845,11 @@ def record_automatic_validation(version_id: int, *, evidence_ids: list[int], man
     if manifest["numero_oficial"] != content.get("numero_oficial") or str(manifest["gabarito"]).strip() != str(content.get("gabarito") or "").strip():
         raise ValueError("Número ou gabarito diverge do snapshot.")
     status = {json.loads(ref.escopo_json or "{}").get("situacao_gabarito") for ref in refs if ref.parte == "gabarito"}
-    if not status.intersection({"definitivo", "documento_fornecido"}) or status.intersection({"preliminar", "conflitante", "anulado"}):
+    preliminary = status == {"preliminar"}
+    if preliminary:
+        if not _preliminary_allowed_for_refs(manifest, refs):
+            raise ValueError("gabarito_preliminar_nao_autorizado_para_estudo")
+    elif not status or not status <= {"definitivo", "documento_fornecido"}:
         raise ValueError("Situação de gabarito não libera validação automática.")
     question_ids = {item["evidencia_id"] for item in manifest["apresentacao"]["questao"]}
     ref_ids = {ref.id for ref in refs}
@@ -853,13 +935,19 @@ def get_automatic_validation(version_id: int) -> dict:
             expected_scope = manifest.get("escopo") or {}
             if any(any(scope.get(k) != expected_scope.get(k) for k in ("prova", "cargo", "codigo", "versao")) for scope in scopes):
                 raise ValueError("escopo_divergente")
-            if any(scope.get("situacao_gabarito") in {"preliminar", "conflitante", "anulado"} for scope in scopes):
+            answer_statuses = {scope.get("situacao_gabarito") for ref, scope in zip(refs, scopes) if ref.parte == "gabarito"}
+            if answer_statuses == {"preliminar"}:
+                if not _preliminary_allowed_for_refs(manifest, refs):
+                    raise ValueError("gabarito_preliminar_nao_autorizado_para_estudo")
+            elif not answer_statuses or not answer_statuses <= {"definitivo", "documento_fornecido"}:
                 raise ValueError("gabarito_nao_libera")
             for item in (manifest.get("apresentacao", {}).get("questao", []) + manifest.get("apresentacao", {}).get("contexto", [])):
                 path = _resource_path(item.get("path"))
                 if not path or not _is_file(path) or _hash_file(path) != item.get("sha256"):
                     raise ValueError("recurso_facsimile_alterado")
             result.update({"valida": True, "manifesto": manifest, "registro_id": row.id})
+            if answer_statuses == {"preliminar"}:
+                result["motivos"].append("gabarito_preliminar_aceito_para_estudo")
             if manifest.get("escopo", {}).get("situacao_gabarito") == "documento_fornecido":
                 result["motivos"].append("gabarito_documento_fornecido")
             return result
@@ -1093,7 +1181,7 @@ def assess_version(version_id: int) -> dict:
         state = answer_review.decisao if answer_review else version.revisao_gabarito
         code = "gabarito_preliminar" if state == "preliminar" else "gabarito_conflitante" if state == "conflitante" else "gabarito_anulado" if state == "anulado" else "gabarito_nao_confirmado"
         message = {
-            "preliminar": "O gabarito é preliminar e não libera uma nova prova.",
+            "preliminar": "Esta versão ainda não possui validação documental do gabarito preliminar fornecido.",
             "conflitante": "Há conflito conhecido entre fontes de gabarito.",
             "anulado": "A questão está anulada e não é avaliável.",
         }.get(state, f"Gabarito está em estado '{state or 'não verificado'}'.")
@@ -1195,6 +1283,12 @@ def assess_version(version_id: int) -> dict:
             alert["resolucao"] = {"decisao": "conteudo_preservado_na_fonte", "origem": "automatica"}
         decisions = [item for item in decisions if item not in unresolved_alerts]
         unresolved_alerts = []
+        if "gabarito_preliminar_aceito_para_estudo" in automatic.get("motivos", []):
+            diagnostics.append(_diagnostic(
+                "gabarito_preliminar_aceito_para_estudo", "associacao_gabarito", "informativo",
+                "verificacao_automatica",
+                "Gabarito preliminar fornecido e aceito para estudo; não é confirmação definitiva.",
+                part="gabarito", action="Mantenha o status preliminar até a confirmação definitiva."))
     released = not blocked and not decisions and (bool(content_refs and answer_refs) or automatic["valida"])
     if any(item["codigo"] in {"fonte_alterada", "fonte_ausente", "escopo_divergente", "snapshot_desatualizado"} for item in diagnostics):
         stage = "identidade_fonte"
@@ -1226,7 +1320,8 @@ def assess_version(version_id: int) -> dict:
         "alertas": alerts,
         "decisoes_humanas_necessarias": decisions,
         "estado_conteudo": "verificado_automaticamente" if automatic["valida"] else content_review.decisao if content_review else version.revisao_conteudo or "nao_verificado",
-        "estado_gabarito": "verificado_automaticamente" if automatic["valida"] else answer_review.decisao if answer_review else version.revisao_gabarito or "desconhecido",
+        "estado_gabarito": ("preliminar" if "gabarito_preliminar_aceito_para_estudo" in automatic.get("motivos", [])
+                             else "verificado_automaticamente") if automatic["valida"] else answer_review.decisao if answer_review else version.revisao_gabarito or "desconhecido",
         "denominadores": {"questoes": 1, "versoes": 1, "documentos": len({item.documento_fonte_id for item in all_evidence})},
     }
 

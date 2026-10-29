@@ -157,6 +157,18 @@ def prepare_repair(*, db_path=DB_PATH, output_dir=None, proof_ids=None):
                 # O verificador geométrico lê o quadro selecionado diretamente;
                 # uma divergência do parser antigo não pode escolher outro cargo.
                 answers = {**answers, **{n: item["resposta"] for n, item in answer_evidence["answers"].items()}}
+        answer_status = "documento_fornecido"
+        answer_digest = None
+        preliminary_allowed = False
+        if answer_path and answer_path.is_file():
+            from src.importador.lote_verificado import _answer_status
+            answer_status = _answer_status(answer_path)
+            answer_digest = _sha(answer_path)
+            if answer_status == "documento_fornecido" and "preliminar" in (answer_path.name + " " + str(binding)).casefold():
+                answer_status = "preliminar"
+            if answer_status == "preliminar":
+                from src.models.provenance_service import preliminary_allowed_for_study
+                preliminary_allowed = preliminary_allowed_for_study(key, geometry["source_sha256"], answer_digest)
         before_count = len(report["propostas"])
         used_ids = set()
         for source_question in geometry["questions"]:
@@ -198,10 +210,11 @@ def prepare_repair(*, db_path=DB_PATH, output_dir=None, proof_ids=None):
             evidence = answer_evidence["answers"].get(number)
             if not answer or not evidence:
                 release_issues.append("gabarito_sem_evidencia_geometrica")
-            status = "documento_fornecido"
-            if answer_path and "preliminar" in (answer_path.name + " " + str(binding)).casefold():
-                status = "preliminar"
+            status = answer_status
+            if status == "preliminar":
                 release_issues.append("gabarito_preliminar")
+                if preliminary_allowed:
+                    release_issues.remove("gabarito_preliminar")
             if proposed["gabarito"] == "Anulada" or (binding and number in binding.get("anuladas", [])):
                 proposed["gabarito"] = "Anulada"
                 release_issues.append("questao_anulada")
@@ -212,7 +225,7 @@ def prepare_repair(*, db_path=DB_PATH, output_dir=None, proof_ids=None):
             report["propostas"].append({"questao_id": old["id"], "prova_id": proof["id"], "numero": number,
                 "anterior": snapshot, "proposta": proposed, "fonte": str(source.resolve()), "fonte_sha256": geometry["source_sha256"],
                 "gabarito_fonte": str(answer_path.resolve()) if answer_path else None,
-                "gabarito_sha256": _sha(answer_path) if answer_path and answer_path.is_file() else None,
+                "gabarito_sha256": answer_digest,
                 "catalogo_chave": key, "escopo": scope, "geometria": source_question,
                 "evidencia_gabarito": evidence, "liberacao_pendencias": release_issues})
         missing = [q["id"] for q in proof["questoes"] if q["id"] not in used_ids]
@@ -251,7 +264,8 @@ def apply_repair(proposal_path, *, db_path=DB_PATH):
     from src.db.models import QuestaoVersao, ProvaCadastradaQuestao, ExecucaoExtracao, RevisaoConteudo, RevisaoGabarito
     from src.models import questoes_repo as repo
     from src.models.provenance_service import (AUTOMATIC_RULE_VERSION, add_evidence, create_source, get_automatic_validation,
-        record_automatic_validation, register_extraction, begin_source_verification_batch, end_source_verification_batch, source_pdf)
+        record_automatic_validation, register_extraction, begin_source_verification_batch, end_source_verification_batch, source_pdf,
+        preliminary_allowed_for_study)
     report = json.loads(Path(proposal_path).read_text(encoding="utf-8"))
     if report["catalogo_sha256"] != _sha(ROOT_DIR / "config/gabaritos.json"):
         raise ValueError("O catálogo mudou desde a proposta.")
@@ -274,6 +288,14 @@ def apply_repair(proposal_path, *, db_path=DB_PATH):
                 qid = proposal["questao_id"]
                 if _sha(proposal["fonte"]) != proposal["fonte_sha256"] or (proposal["gabarito_sha256"] and _sha(proposal["gabarito_fonte"]) != proposal["gabarito_sha256"]):
                     raise ValueError(f"Fonte da questão {qid} mudou; transação revertida.")
+                release_pendencies = list(proposal["liberacao_pendencias"])
+                if proposal.get("escopo", {}).get("situacao_gabarito") == "preliminar":
+                    allowed = preliminary_allowed_for_study(proposal.get("catalogo_chave"), proposal["fonte_sha256"], proposal.get("gabarito_sha256"))
+                    if not allowed:
+                        if "gabarito_preliminar" not in release_pendencies:
+                            release_pendencies.append("gabarito_preliminar")
+                    else:
+                        release_pendencies = [item for item in release_pendencies if item != "gabarito_preliminar"]
                 current = repo.obter_questao(qid)
                 if current:
                     current["alternativas"] = current.get("alternativas") or []
@@ -303,7 +325,7 @@ def apply_repair(proposal_path, *, db_path=DB_PATH):
                     if rejected and unchanged_content:
                         result["pendencias"].append({"questao_id": qid, "motivos": ["rejeicao_humana_do_mesmo_conteudo"]})
                         continue
-                    if proposal["liberacao_pendencias"] and set(proposal["liberacao_pendencias"]) <= {"gabarito_sem_evidencia_geometrica"} and get_automatic_validation(latest.id)["valida"]:
+                    if release_pendencies and set(release_pendencies) <= {"gabarito_sem_evidencia_geometrica"} and get_automatic_validation(latest.id)["valida"]:
                         # Uma dificuldade nova do extrator não revoga evidência
                         # íntegra já existente para a mesma versão e fonte.
                         result["ja_aplicadas"] += 1
@@ -320,7 +342,7 @@ def apply_repair(proposal_path, *, db_path=DB_PATH):
                     applied = bool(assets) and all(Path(a["path"]).is_file() and _sha(a["path"]) == a["sha256"] for a in assets)
                     applied = applied and current.get("imagem_path") == media["questao"][0]["path"]
                 if applied:
-                    if proposal["liberacao_pendencias"] or get_automatic_validation(latest.id)["valida"]:
+                    if release_pendencies or get_automatic_validation(latest.id)["valida"]:
                         result["ja_aplicadas"] += 1
                         continue
                     # O conteúdo já coincide integralmente com este reparo,
@@ -364,8 +386,8 @@ def apply_repair(proposal_path, *, db_path=DB_PATH):
                     (ProvaCadastradaQuestao.prova_cadastrada == proposal["prova_id"]) &
                     (ProvaCadastradaQuestao.questao == qid)).execute()
                 result["reparadas"] += 1
-                if proposal["liberacao_pendencias"]:
-                    result["pendencias"].append({"questao_id": qid, "motivos": proposal["liberacao_pendencias"]})
+                if release_pendencies:
+                    result["pendencias"].append({"questao_id": qid, "motivos": release_pendencies})
                     continue
                 ids = []
                 for kind, regions in (("questao", geometry["regions"]), ("contexto", geometry["context_regions"])):

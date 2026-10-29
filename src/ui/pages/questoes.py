@@ -184,8 +184,15 @@ class QuestoesPage(QWidget):
         self.review_queue_task = DatabaseTask(self)
         self.review_queue_button = QPushButton('Revisar pendências da lista')
         self.review_queue_button.clicked.connect(self.abrir_fila_revisao)
-        analysis_row.addWidget(self.review_queue_button)
         layout.addLayout(analysis_row)
+        queue_actions = QHBoxLayout()
+        queue_actions.addWidget(self.review_queue_button)
+        self.triage_button = QPushButton('Triar lista automaticamente')
+        self.triage_button.setObjectName('secondary-button')
+        self.triage_button.clicked.connect(self.abrir_triagem)
+        queue_actions.addWidget(self.triage_button)
+        queue_actions.addStretch()
+        layout.addLayout(queue_actions)
         self.tabela = QTableWidget(); self.tabela.setColumnCount(7); self.tabela.setHorizontalHeaderLabels(["ID", "Enunciado", "Disciplina", "Banca", "Ano", "Gabarito", "Funil / motivos"])
         self.tabela.setObjectName("question-bank-table"); self.tabela.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch); self.tabela.setSelectionBehavior(QTableWidget.SelectRows); self.tabela.setEditTriggers(QTableWidget.NoEditTriggers); self.tabela.setAlternatingRowColors(True); self.tabela.setShowGrid(False); self.tabela.verticalHeader().setVisible(False); self.tabela.verticalHeader().setDefaultSectionSize(48); self.tabela.doubleClicked.connect(self.abrir_edicao_questao)
         layout.addWidget(self.tabela)
@@ -299,6 +306,17 @@ class QuestoesPage(QWidget):
             + (f" · Motivos: {motivos}" if motivos else " · sem pendências")
         )
         dialog = QuestionSourceReviewDialog(dados["id"], self)
+        dialog.exec()
+        self.carregar_dados()
+
+    def abrir_triagem(self):
+        ids = [self.tabela.item(row, 0).data(Qt.UserRole)['id'] for row in range(self.tabela.rowCount())]
+        if not ids:
+            self.analysis_status.setText('Não há questões nesta lista. Ajuste a busca ou os filtros.')
+            return
+        from src.ui.components.triage_review import TriageReviewDialog
+        dialog = TriageReviewDialog(ids, self)
+        QTimer.singleShot(0, dialog.start_analysis)
         dialog.exec()
         self.carregar_dados()
 

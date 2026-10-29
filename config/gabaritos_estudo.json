@@ -1,0 +1,66 @@
+{
+  "versao": 1,
+  "origem_confirmacao": "Usuário confirmou no chat que os gabaritos fornecidos, inclusive preliminares/parciais, são os gabaritos para uso no estudo.",
+  "fontes": [
+    {
+      "catalogo_chave": "administrador-fgv.pdf",
+      "caderno_sha256": "0ade2ba073e4bd8add373ff009e6f435ea0ab9484773d340a8f98c34b2fb3703",
+      "gabarito_sha256": "ba5f08c8cc4a3d04f0611c9a188a9e39bd3d5d87d11813ede17b62e2e578c817",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "agente_especializado_analista_de_sistemas.pdf",
+      "caderno_sha256": "2ccdf39df44c243b79b941d51e3966166ceb5e359ba8e9cd10c665f0ab240af6",
+      "gabarito_sha256": "72ae6e3df2b129ca337588621ea8cab25fccc224596dec916f1ea994327cc7f4",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/agente_administrativo_i-1.pdf",
+      "caderno_sha256": "5a0c867b2cf8f790dbc375a68b65359af315d2b2cbd8450ff573084f72a2f32e",
+      "gabarito_sha256": "7ddeba468d972f33c8924f0c692a2d9f0c5af516001463e58ac65e8bdc80ab78",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/agente_administrativo_i-2.pdf",
+      "caderno_sha256": "74b8cfa1e033920be75f9e3ea51f338dcc3f49acdabb53f002a1e58bc41aba77",
+      "gabarito_sha256": "508f1804541516f738126ba8def7dfa0dfbfec18412c724415d9503e4ed0db2e",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/agente_administrativo_i-3.pdf",
+      "caderno_sha256": "c2337afb48de51a4559f5e2b20c298c392beba11e8c47e3cb1930ba902306d7f",
+      "gabarito_sha256": "64f8e38b9e718d2e3a8856c53a3f1c4dd2d3f6ba94f456d624cec5f876dc3c8f",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/agente_administrativo_i-4.pdf",
+      "caderno_sha256": "b7506c9d837c353a5148cf2399b09104e2f588a03a1d6c2025f78d8a4daa83c7",
+      "gabarito_sha256": "238a6aa61648ceb1ce3a4b7d677220d49ec5edd65f0d576f213c34b4e7bc4185",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/analista_adm_desenvolvimento_sistemas.pdf",
+      "caderno_sha256": "dced4ae770d04fc8ffe5cced4307b1b4d083ac0ed65e37d532253b71ac2dad6a",
+      "gabarito_sha256": "50d549c8241760cd3369e3b0ca945d1272fcbc36b5569168d177f1bb4a592d92",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/analista_administrativo_iii_analista_de_sistemas.pdf",
+      "caderno_sha256": "617d85b4491c4e3de3ca9c6132c235182b5a7c4dfd893646fe3795a714ec951a",
+      "gabarito_sha256": "a65f65f1d80683dab3b770220c6f1e8e0f5d3e27aad1f0c27a04841a57d76981",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/analista_producao_redes_suporte_de_banco_de_dados_e_suporte_de_sistemas.pdf",
+      "caderno_sha256": "dc9f3a2c2fdda14aa869a45a22fe0ff381c3883f90ef66cfc7ad5bb474ca6f74",
+      "gabarito_sha256": "576d607971c27300e087406a9028d800ec1571a587167d139fc39ca35bc6701c",
+      "aceitar_preliminar_para_estudo": true
+    },
+    {
+      "catalogo_chave": "lote_2026_08_22/auditor_fiscal.pdf",
+      "caderno_sha256": "0a3b56eb3228acd0dd569177371a4d26516877e6bfbdf6514f7621fcdba85a0e",
+      "gabarito_sha256": "856b083894e2b6d4878f6b56984d9f35daae2f521201ff2830bc9669635d65b1",
+      "aceitar_preliminar_para_estudo": true
+    }
+  ]
+}

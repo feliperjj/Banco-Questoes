@@ -16,10 +16,15 @@
 
 ## Corrigir um campo
 
+O botão **Conferir com IA local** oferece transcrição assistida do recorte para
+enunciado, apoio e uma alternativa por vez, com confronto PDF/OCR/IA e cache.
+A sugestão continua pendente e não libera a questão. Veja instalação,
+limites, avaliação e coleta de exemplos em [IA local](IA_LOCAL.md).
+
 **Corrigir somente este campo** permite escolher enunciado, apoio, alternativas,
 gabarito ou número oficial. O formulário mostra o valor atual e a proposta.
 
-**Reler somente o recorte selecionado no PDF** extrai apenas a região/página
+**Reler recorte do PDF** extrai apenas a região/página
 selecionada, em worker, sem importar novamente o caderno ou salvar a proposta.
 Enunciado e apoio recebem o texto como proposta editável. Número, alternativas
 e gabarito exigem preenchimento explícito a partir do trecho exibido. As

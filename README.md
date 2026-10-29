@@ -48,6 +48,7 @@ O objetivo não é fingir que todo PDF possui o mesmo formato. O objetivo é aut
 
 - [Caderno técnico](docs/CADERNO_TECNICO.md): evolução, conceito, arquitetura, banco de dados e decisões de código.
 - [Cérebro operacional](docs/PROJECT_BRAIN.md): contratos, checklist de regressão, riscos e matriz de validação.
+- [Assistência de IA local](docs/IA_LOCAL.md): releitura sob demanda, comparação de evidências, avaliação e exemplos para futura especialização, sem API paga.
 - [Plano do funil de análises](docs/PLANO_ACAO_FUNIL_ANALISES_LUNA.md) e [relatório da execução](docs/RELATORIO_FUNIL_ANALISES_LUNA.md): decisões, validações, estado do acervo e pendências humanas.
 - [Reparação automática do acervo](docs/RELATORIO_REPARACAO_AUTOMATICA_2026-10-27.md): resultado atualizado por prova, limites da verificação e backups.
 - [Relatório de reimportação](docs/RELATORIO_REIMPORTACAO_SAMPLES.md): resultado por sample, bancas, disciplinas, gabaritos e pendências.
